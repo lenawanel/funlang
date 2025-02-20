@@ -33,6 +33,7 @@ static uint16_t intern_mark(LexBuf lexbuf)
 static Intern intern_strview(LexBuf *restrict lexbuf, StrView s)
 {
   uint32_t len = MIN(s.len, MAX_INTERN_LEN);
+
   lexbuf->intern.len += len;
   if (lexbuf->intern.len > lexbuf->intern.cap)
     grow_array((DynamicArray *)&lexbuf->intern, sizeof(char));
@@ -41,7 +42,7 @@ static Intern intern_strview(LexBuf *restrict lexbuf, StrView s)
               .len = (uint16_t)(s.len << 8)};
 
   memcpy(lexbuf->intern.buffer + lexbuf->intern.len - len, s.source,
-         s.len * sizeof(char));
+         len * sizeof(char));
 
   return i;
 }
@@ -270,7 +271,7 @@ typedef struct ScopeStacks
       hash >>= 2;
 
       uint8_t cursor = scopes.cursors[hash]++;
-      if (cursor > MAX_SCOPE_DEPTH)
+      if (cursor >= MAX_SCOPE_DEPTH)
         goto next_token; // scope exceeded max depth,
                          // so this token is INVALID
       scopes.stacks[hash][cursor] = res_buf.tokens.len;
@@ -286,7 +287,7 @@ typedef struct ScopeStacks
 
       uint8_t cursor = --scopes.cursors[hash];
 
-      if (cursor > MAX_SCOPE_DEPTH)
+      if (cursor >= MAX_SCOPE_DEPTH)
       {
         // scope isn't opened, or exceeds max depth
         // either way, this token is INVALID

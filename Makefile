@@ -8,10 +8,10 @@ build/lexer.o: lexer.c lexer.h common.h build
 	gcc -O3 $(CFLAGS) -c lexer.c -o build/lexer.o
 
 build/lexer_harness: build/afl_lexer.o build
-	AFL_USE_ASAN=1 afl-clang-lto -std=c23 -O3 -DNDEBUG build/afl_lexer.o lexer_harness.c -o build/lexer_harness
+	afl-clang-lto -std=c23 -O3 -march=native -DNDEBUG build/afl_lexer.o lexer_harness.c -o build/lexer_harness
 
 build/afl_lexer.o: lexer.c lexer.h common.h build
-	AFL_USE_ASAN=1 afl-clang-lto -std=c23 -O3 -DNDEBUG -c lexer.c -o build/afl_lexer.o
+	afl-clang-lto -std=c23 -O3 -march=native -DNDEBUG -c lexer.c -o build/afl_lexer.o
 
 build:
 	mkdir build
