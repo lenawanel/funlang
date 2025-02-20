@@ -46,8 +46,8 @@ void grow_array(register DynamicArray *restrict array,
 
   void *new_buf = realloc(array->buffer, elem_size * new_cap);
 
-  assert(new_buf &&
-         "failed to reallocate new_buf"); // TODO: actual error handling
+  // TODO: actual error handling
+  assert(new_buf && "failed to reallocate new_buf");
 
   array->buffer = new_buf;
   array->cap = new_cap;
@@ -57,7 +57,7 @@ uint32_t push_elem(register DynamicArray *restrict array,
                    register size_t elem_size, register void *elem)
 {
   if (++array->len > array->cap)
-    grow_array((DynamicArray *)&array->buffer, elem_size);
+    grow_array(array, elem_size);
 
   memcpy(array->buffer + elem_size * (array->len - 1), elem, elem_size);
 

@@ -8,20 +8,16 @@
 #include <string.h>
 #include <unistd.h>
 
-
 #define MAX_INTERN_LEN 0xff
-#define MIN(a,b) (((a)<(b))?(a):(b))
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
 typedef struct
 {
-  char *intern;
-  uint32_t intern_len, intern_cap;
+  DynamicArray intern;
 
-  Token *tokens;
-  uint32_t tokens_len, tokens_cap;
+  DynamicArray tokens;
 
-  uint64_t *lits;
-  uint32_t lits_len, lits_cap;
+  DynamicArray lits;
 } LexBuf;
 
 static void intern_char(LexBuf *restrict lexbuf, char c)
@@ -31,20 +27,20 @@ static void intern_char(LexBuf *restrict lexbuf, char c)
 
 static uint16_t intern_mark(LexBuf lexbuf)
 {
-  return (uint16_t)lexbuf.intern_len;
+  return (uint16_t)lexbuf.intern.len;
 }
 
 static Intern intern_strview(LexBuf *restrict lexbuf, StrView s)
 {
   uint32_t len = MIN(s.len, MAX_INTERN_LEN);
-  lexbuf->intern_len += len;
-  if (lexbuf->intern_len > lexbuf->intern_cap)
+  lexbuf->intern.len += len;
+  if (lexbuf->intern.len > lexbuf->intern.cap)
     grow_array((DynamicArray *)&lexbuf->intern, sizeof(char));
 
-  Intern i = {.idx = (uint16_t)(lexbuf->intern_len - len),
+  Intern i = {.idx = (uint16_t)(lexbuf->intern.len - len),
               .len = (uint16_t)(s.len << 8)};
 
-  memcpy(lexbuf->intern + lexbuf->intern_len - len, s.source,
+  memcpy(lexbuf->intern.buffer + lexbuf->intern.len - len, s.source,
          s.len * sizeof(char));
 
   return i;
@@ -52,12 +48,12 @@ static Intern intern_strview(LexBuf *restrict lexbuf, StrView s)
 
 static uint32_t push_lit(LexBuf *restrict lexbuf, uint64_t val)
 {
-  return push_elem((DynamicArray *)&lexbuf->lits, sizeof(uint64_t), &val);
+  return push_elem(&lexbuf->lits, sizeof(uint64_t), &val);
 }
 
 static void push_token(LexBuf *restrict lexbuf, Token tok)
 {
-  push_elem((DynamicArray *)&lexbuf->tokens, sizeof(Token), &tok);
+  push_elem(&lexbuf->tokens, sizeof(Token), &tok);
 }
 
 void destroy_lexres(LexRes lex_res)
@@ -67,26 +63,34 @@ void destroy_lexres(LexRes lex_res)
   free(lex_res.lits);
 }
 
-static void consume_ws(Lexer *restrict l)
+static bool consume_ws(Lexer *restrict l)
 {
+  bool skipped = false;
+
   while (l->pos < l->end && isspace(l->source[l->pos]))
+  {
+    skipped = true;
     l->pos++;
+  }
+
+  return skipped;
 }
 
-static void consume_comment(Lexer *restrict l)
+static bool consume_comment(Lexer *restrict l)
 {
   if (l->pos + 1 > l->end)
-    return;
-  if (l->source[l->pos] == '/')
+    return false;
+
+  if (l->source[l->pos++] == '/')
   {
-    if (l->source[l->pos + 1] == '/')
+    if (l->source[l->pos++] == '/')
     { // single line comment
       while (l->pos < l->end && l->source[l->pos] != '\n')
         l->pos++; // consume until newline
-      return;
+      return true;
     }
 
-    else if (l->source[l->pos + 1] == '*')
+    else if (l->source[l->pos++] == '*')
     {
       while (++l->pos < l->end)
       {
@@ -95,9 +99,10 @@ static void consume_comment(Lexer *restrict l)
           break; // consume matching comment close
       }
       ++l->pos;
-      return;
+      return true;
     }
   }
+  return false;
 }
 
 static char unescape(char **s)
@@ -163,9 +168,13 @@ typedef struct ScopeStacks
 
   while (l.pos < l.end)
   {
-    consume_ws(&l);      // skip all white space
-    consume_comment(&l); // skip comments
-    consume_ws(&l);      // skip the white space after comments
+    bool skippeable = true;
+    // skip all whitespace and comments
+    while (skippeable)
+    {
+      skippeable = consume_ws(&l);
+      skippeable |= consume_comment(&l);
+    }
 
     if (l.pos >= l.end)
       break;
@@ -264,7 +273,7 @@ typedef struct ScopeStacks
       if (cursor > MAX_SCOPE_DEPTH)
         goto next_token; // scope exceeded max depth,
                          // so this token is INVALID
-      scopes.stacks[hash][cursor] = res_buf.tokens_len;
+      scopes.stacks[hash][cursor] = res_buf.tokens.len;
       tok.pos = l.pos++;
       tok.tag = (uint32_t)char_at;
     }
@@ -290,7 +299,8 @@ typedef struct ScopeStacks
       }
       uint32_t opening_delim = scopes.stacks[hash][cursor];
       // fix up the opening delimitier
-      res_buf.tokens[opening_delim].matching_scp |= res_buf.tokens_len << 8;
+      ((Token *)res_buf.tokens.buffer)[opening_delim].matching_scp |=
+          res_buf.tokens.len << 8;
 
       tok.pos = l.pos++;
       tok.tag = (uint32_t)char_at;
@@ -298,10 +308,10 @@ typedef struct ScopeStacks
     }
     else if (ispunct(char_at))
     {
-      tok.pos = l.pos;
+      tok.pos = l.pos++;
       if (char_at == '-')
       {
-        if (l.source[++l.pos] == '>')
+        if (l.source[l.pos] == '>')
         {
           tok.tag = KW_ARROW;
         }
@@ -309,14 +319,12 @@ typedef struct ScopeStacks
         {
           tok.tag = HYPHON;
         }
-
-        l.pos++;
       }
       else
       {
         tok.tag = (uint32_t)char_at;
-        l.pos++;
       }
+      l.pos++;
     }
     else
     {
@@ -328,87 +336,10 @@ typedef struct ScopeStacks
   }
 
   LexRes res;
-  res.intern = res_buf.intern;
-  res.tokens = res_buf.tokens;
-  res.tok_num = res_buf.tokens_len;
-  res.lits = res_buf.lits;
+  res.intern = res_buf.intern.buffer;
+  res.tokens = res_buf.tokens.buffer;
+  res.tok_num = res_buf.tokens.len;
+  res.lits = res_buf.lits.buffer;
 
   return res;
 }
-
-/*
-static void _print_toks(LexRes token_buf) {
-  for (uint32_t i = 0; i < token_buf.tok_num; ++i) {
-    putchar(' ');
-    Token tok = token_buf.tokens[i];
-    switch (tok.tag & 0xff) {
-      case INVALID: printf("INVALID"); break;
-      case LIT_INT: printf("%lu", token_buf.lits[tok.as_lit_idx >> 8]); break;
-      case LIT_STR:
-        printf("\"%.*s\"", tok.as_str_lit.len >> 8,
-               token_buf.intern + tok.as_str_lit.idx);
-        break;
-      case  VAL_ID:
-        printf("val_id(%.*s)", tok.as_val_ident.len >> 8,
-               token_buf.intern + tok.as_val_ident.idx);
-        break;
-      case  TYPE_ID:
-        printf("typ_id(%.*s)", tok.as_typ_ident.len >> 8,
-               token_buf.intern + tok.as_typ_ident.idx);
-        break;
-      case COLON:
-      case SEMI:
-      case HYPHON:
-      case PIPE:
-        putchar(tok.tag);
-        break;
-      case PAREN_O:
-      case PAREN_C:
-      case BRACE_O:
-      case BRACE_C:
-      case BRACK_O:
-      case BRACK_C: {
-        uint32_t scope = tok.matching_scp >> 8;
-        printf("%c matching %d", tok.tag & 0xff, scope);
-        break;
-      }
-      case KW_AS: printf("as"); break;
-      case KW_FN: printf("fn"); break;
-      case KW_RET: printf("return"); break;
-      case KW_ARROW: printf("->"); break;
-      default: printf("unkown token"); break;
-    }
-  }
-  printf("\n");
-}
-
-
-int main(int argc, char** argv) {
-  if (argc < 2) {
-    printf("provide a file to lex\n");
-    exit(1);
-  }
-  FILE *f = fopen(argv[1], "rb");
-  fseek(f, 0, SEEK_END);
-  long fsize = ftell(f);
-  fseek(f, 0, SEEK_SET);  // same as rewind(f);
-
-  char *string = malloc(fsize + 1);
-  fread(string, fsize, 1, f);
-  fclose(f);
-
-  string[fsize] = 0;
-  Lexer l = {.source = string, .pos = 0, .end = fsize - 1};
-  LexRes lexres = lex(l);
-  free(string);
-
-  printf("found %d tokens\n", lexres.tok_num);
-
-  _print_toks(lexres);
-
-  destroy_lexres(lexres);
-
-  return 0;
-}
-
-*/

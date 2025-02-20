@@ -23,7 +23,7 @@ typedef struct __attribute__((aligned(8))) ParseNode
   {
     struct
     {
-      char    *text;
+      char *text;
       uint32_t size;
     } str_view;
     uint64_t lit;
@@ -36,32 +36,31 @@ typedef struct __attribute__((aligned(8))) ParseNode
 
 typedef struct ParseBuffer
 {
-  char    *intern;
-  uint32_t intern_len, intern_cap;
+  DynamicArray intern;
 
-  ParseNode *tree_buf;
-  uint32_t   tree_len, tree_cap;
+  DynamicArray tree_buf;
 } ParseBuffer;
 
 static void push_node(ParseBuffer *restrict buf, ParseNode parse_node)
 {
-  push_elem((DynamicArray *)&buf->tree_buf, sizeof(ParseNode), &parse_node);
+  push_elem(&buf->tree_buf, sizeof(ParseNode), &parse_node);
 }
 
+// TODO: maybe just reuse the old intern?
 void intern_lex_interned_into(ParseBuffer *buf, char *lex_intern, Intern intern,
                               ParseNode *node)
 {
-  node->str_view.text = buf->intern + buf->intern_len;
+  node->str_view.text = buf->intern.buffer + buf->intern.len;
 
   uint32_t intern_len = intern.len >> 8;
   node->str_view.size = intern_len;
-  buf->intern_len += intern_len;
+  buf->intern.len += intern_len;
 
-  if (buf->intern_len > buf->intern_cap)
+  if (buf->intern.len > buf->intern.cap)
     grow_array((DynamicArray *)&buf->intern, sizeof(char));
 
-  memcpy(buf->intern + buf->intern_len - intern_len, lex_intern + intern.idx,
-         intern_len);
+  memcpy(buf->intern.buffer + buf->intern.len - intern_len,
+         lex_intern + intern.idx, intern_len);
 }
 
 typedef struct ParseRes
@@ -69,7 +68,7 @@ typedef struct ParseRes
   char *intern;
 
   ParseNode *tree_buf;
-  uint32_t   tree_len;
+  uint32_t tree_len;
 } ParseRes;
 
 void destroy_ast(ParseRes a)
@@ -97,7 +96,7 @@ typedef enum
   // a list of argumets of the for (name1: type, ..)
   ARGBINDLIST_BEGIN = 0x1,
   ARGBINDLIST_BODY = 0x2,
-  ARGBINDLIST_END  = 0x3,
+  ARGBINDLIST_END = 0x3,
   // a list of implicit arguments of the form [Type0, Type1 <: Type2, ..]
   IMPLICIT_ARGS_BEGIN = 0x4,
   // a block of statements optionally ending with an expression
@@ -107,7 +106,7 @@ typedef enum
   RULE_COLON = 0x7,
   // a Type currently only supports type names
   // TODO: make the types of all values (e.g functions) nameable
-  RULE_TYPE  = 0x8,
+  RULE_TYPE = 0x8,
   RULE_VAL_ID = 0x9,
 } ParserStateKind;
 
@@ -126,31 +125,30 @@ typedef struct
 
 typedef struct
 {
-  ParserState *stack;
-  uint32_t len, cap;
+  DynamicArray stack;
 } ParseStack;
 
 static void push_state(register ParseStack *restrict state,
                        ParserState parser_state)
 {
-  push_elem((DynamicArray *)&state->stack, sizeof(ParserState), &parser_state);
+  push_elem(&state->stack, sizeof(ParserState), &parser_state);
 }
 
 static ParserState pop_state(register ParseStack *restrict state)
 {
   ParserState p;
-  pop_elem((DynamicArray *)&state->stack, sizeof(ParserState), &p);
+  pop_elem(&state->stack, sizeof(ParserState), &p);
   return p;
 }
 
 static ParserState cur_state(register ParseStack *restrict state)
 {
-  return state->stack[state->len - 1];
+  return ((ParserState *)state->stack.buffer)[state->stack.len - 1];
 }
 
 ParseRes parse(LexRes lexres)
 {
-  ParseBuffer buf  = {};
+  ParseBuffer buf = {};
   ParseStack state = {};
 
   push_state(&state, (ParserState){.data = 0, .kind = FUNCTION});
@@ -210,6 +208,7 @@ ParseRes parse(LexRes lexres)
         matched = false;
         break;
       }
+      break;
     case KW_FN:
       matched = current.kind & FUNCTION;
       if (!matched)
@@ -245,7 +244,7 @@ ParseRes parse(LexRes lexres)
     { // if an optional rule didn't match, continue trying the next
       // one
       if (flags_present(current.kind, SEQUENCE_START))
-        state.len -=
+        state.stack.len -=
             current.data - 1; // we didn't match the start of a sequence
                               // so we skip every other part too
       continue;
@@ -254,15 +253,16 @@ ParseRes parse(LexRes lexres)
       abort(); // TODO: error handling
 
     if (flags_present(current.kind, SEQUENCE_END | MANY))
-      state.len += current.data; // we matched a full reccuring sequence
+      state.stack.len += current.data; // we matched a full reccuring sequence
     else if (flags_present(current.kind, MANY))
-      state.len++; // we matched a rule that may infinitely repeat
-                   // so we repush this exact rule
-                   // in practice it's unlikely that I'll use this
+      state.stack.len++; // we matched a rule that may infinitely repeat
+                         // so we repush this exact rule
+                         // in practice it's unlikely that I'll use this
   }
 
-  ParseRes res = {
-      .tree_buf = buf.tree_buf, .tree_len = buf.tree_len, .intern = buf.intern};
+  ParseRes res = {.tree_buf = buf.tree_buf.buffer,
+                  .tree_len = buf.tree_buf.len,
+                  .intern = buf.intern.buffer};
 
   return res;
 }
