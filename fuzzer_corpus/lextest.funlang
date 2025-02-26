@@ -1,7 +1,6 @@
 // comment
+
 fn aalksdjf() -> AType {
 	return 00000;
 	/* another comment */
 }
-
-/* unclosed comment

@@ -1,4 +1,5 @@
 #include "hashtable.h"
+#include <stdio.h>
 #include <sys/mman.h>
 
 static uint32_t fnv_32_str(StrView str)
@@ -36,10 +37,11 @@ static void insert_unique_in_cap(SetEntry *restrict ens, StrView str,
 static void grow(HSet *restrict hs)
 {
   uint32_t new_cap = hs->encap ? hs->encap << 1 : 0x1000;
-  SetEntry *nentrs = mmap(NULL, new_cap, PROT_READ | PROT_WRITE,
-                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  SetEntry *nentrs =
+      mmap(NULL, new_cap * sizeof(SetEntry), PROT_READ | PROT_WRITE,
+           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
-  assert((uintptr_t)nentrs <= 0 && "failed to mmap HSet");
+  assert((uintptr_t)nentrs != ~0ull && "failed to mmap HSet");
 
   SetEntry *ben = hs->entrs;
   SetEntry *een = ben + hs->encap;
@@ -48,7 +50,8 @@ static void grow(HSet *restrict hs)
 
   while (ben++ < een)
   {
-    if (!ben->skey.txt) continue;
+    if (!ben->skey.txt)
+      continue;
 
     insert_unique_in_cap(nentrs, ben->skey, mask);
   }
@@ -67,18 +70,21 @@ bool insert_str(HSet *restrict hs, StrView str)
     grow(hs);
 
   uint32_t cap_mask = hs->encap - 1;
+  printf("cap_mask: %b\n", cap_mask);
+  printf("hs->encap: %x\n", hs->encap);
   uint32_t idx = fnv_32_str(str) & cap_mask;
+  printf("idx: %x\n", idx);
+  printf("hs->entrs: %p\n", hs->entrs);
 
-  SetEntry ent;
-  while ((ent = hs->entrs[idx]).skey.txt)
+  for (SetEntry ent = hs->entrs[idx]; ent.skey.txt; idx = (idx + 1) & cap_mask)
   {
     if (!memcmp(ent.skey.txt, str.txt, MIN(ent.skey.len, str.len)))
       return false;
-
-    idx = (idx + 1) & cap_mask;
   }
 
   hs->entrs[idx].skey = str;
+
+  hs->inuse++;
 
   return true;
 }
@@ -97,23 +103,25 @@ bool remove_str(HSet *restrict hs, StrView str)
     if (!memcmp(ent.skey.txt, str.txt, MIN(ent.skey.len, str.len)))
     {
       there = true;
-      hs->entrs[idx].skey = (StrView){.txt = nullptr, .len = 0};
+      hs->entrs[idx].skey = (StrView){};
       break;
     }
 
     idx = (idx + 1) & cap_mask;
   }
 
+  hs->inuse--;
+
   return there;
 }
 
-StrView insert(HSet *restrict hs, char *text, uint32_t len)
+StrView insert(HSet *restrict hs, char *to_insert, uint32_t len)
 {
-  bool new  = insert_str(hs, (StrView){.len = len, .txt = text});
+  bool new = insert_str(hs, (StrView){.len = len, .txt = to_insert});
   char *txt = hs->intrn.buffer;
 
   if (new)
-    append_buf(&hs->intrn, sizeof(char), text, len);
+    append_buf(&hs->intrn, sizeof(char), to_insert, len);
 
   return (StrView){.txt = txt, .len = len};
 }

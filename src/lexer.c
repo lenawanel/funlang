@@ -1,6 +1,7 @@
 #include "lexer.h"
 #include "common.h"
 #include <ctype.h>
+#include <string.h>
 
 #define MAX_INTERN_LEN 0xff
 
@@ -75,24 +76,29 @@ static bool consume_comment(Lexer *restrict l)
   if (l->pos + 1 > l->end)
     return false;
 
-  if (l->source[l->pos++] == '/')
+  if (l->source[l->pos] == '/')
   {
-    if (l->source[l->pos++] == '/')
+    l->pos++;
+
+    if (l->source[l->pos] == '/')
     { // single line comment
+      l->pos++;
+
       while (l->pos < l->end && l->source[l->pos] != '\n')
         l->pos++; // consume until newline
       return true;
     }
-
-    else if (l->source[l->pos++] == '*')
+    else if (l->source[l->pos] == '*')
     {
+      l->pos++;
+
       while (++l->pos < l->end)
       {
-        uint32_t pos = l->pos;
-        if (l->source[pos] == '*' && l->source[++l->pos] == '/')
+        if (l->pos + 1 >= l->end || !memcmp("*/", &l->source[l->pos], 2))
           break; // consume matching comment close
       }
-      ++l->pos;
+
+      l->pos++;
       return true;
     }
   }
@@ -133,16 +139,18 @@ static char unescape(char **s)
 static TokTag hash_kw(const char *s, uint32_t len)
 {
   // TODO: efficient perfect hash
-  if (len != 2 && len != 6)
+  if (len != 2 && len != 6 && len != 3)
     ; // we don't have a keyword
   else if (!strncmp(s, "return", len))
-    return KW_RET;
+    return TOK_KW_RETRN;
   else if (!strncmp(s, "as", len))
-    return KW_AS;
+    return TOK_KW_AS;
+  else if (!strncmp(s, "let", len))
+    return TOK_KW_LET;
   else if (!strncmp(s, "fn", len))
-    return KW_FN;
+    return TOK_KW_FN;
 
-  return VAL_ID;
+  return TOK_VAL_ID;
 }
 
 #define MAX_SCOPE_DEPTH 10
@@ -177,6 +185,7 @@ typedef struct ScopeStacks
 
     char char_at = l.source[l.pos];
 
+    // TODO: clean up this stuff, it's ugly
     if (isdigit(char_at))
     { // TODO: convert this into a jump table
       // we are lexing a number
@@ -189,7 +198,7 @@ typedef struct ScopeStacks
       uint32_t idx = push_lit(&res_buf, num);
       tok.pos = l.pos;
       tok.as_lit_idx = idx;
-      tok.tag |= LIT_INT;
+      tok.tag |= TOK_LIT_INT;
 
       l.pos += (uint32_t)(end - start);
     }
@@ -204,7 +213,7 @@ typedef struct ScopeStacks
       uint32_t len = l.pos - start;
 
       TokTag kind = hash_kw(l.source + start, len);
-      if (kind == VAL_ID)
+      if (kind == TOK_VAL_ID)
       { // we have a value ident
         StrView s = {.txt = l.source + start, .len = len};
         Intern i = intern_strview(&res_buf, s);
@@ -227,7 +236,7 @@ typedef struct ScopeStacks
       Intern i = intern_strview(&res_buf, s);
       tok.pos = start;
       tok.as_val_ident = i;
-      tok.tag |= TYPE_ID;
+      tok.tag |= TOK_TYPE_ID;
     }
     else if (char_at == '"')
     {
@@ -254,7 +263,7 @@ typedef struct ScopeStacks
       l.pos++; // skip last quote
       tok.pos = start;
       tok.as_str_lit = i;
-      tok.tag |= LIT_INT;
+      tok.tag |= TOK_LIT_INT;
     }
     else if (char_at == '(' || char_at == '{' || char_at == '[')
     {
@@ -294,11 +303,11 @@ typedef struct ScopeStacks
       uint32_t opening_delim = scopes.stacks[hash][cursor];
       // fix up the opening delimitier
       ((Token *)res_buf.tokens.buffer)[opening_delim].matching_scp |=
-          res_buf.tokens.len << 8;
+          (int32_t)((res_buf.tokens.len - opening_delim) << 8);
 
       tok.pos = l.pos++;
       tok.tag = (uint32_t)char_at;
-      tok.matching_scp |= opening_delim << 8;
+      tok.matching_scp |= (int32_t)((opening_delim - res_buf.tokens.len) << 8);
     }
     else if (ispunct(char_at))
     {
@@ -307,11 +316,22 @@ typedef struct ScopeStacks
       {
         if (l.source[l.pos] == '>')
         {
-          tok.tag = KW_ARROW;
+          tok.tag = TOK_KW_ARROW;
         }
         else
         {
-          tok.tag = HYPHON;
+          tok.tag = TOK_HYPHON;
+        }
+      }
+      else if (char_at == '<')
+      {
+        if (l.source[l.pos] == ':')
+        {
+          tok.tag = TOK_KW_SUBTY;
+        }
+        else
+        {
+          tok.tag = (unsigned char)char_at;
         }
       }
       else
@@ -332,7 +352,7 @@ typedef struct ScopeStacks
   LexRes res;
   res.intern = res_buf.intern.buffer;
   res.tokens = res_buf.tokens.buffer;
-  res.tok_num = res_buf.tokens.len;
+  res.tkeptr = res_buf.tokens.buffer + res_buf.tokens.len;
   res.lits = res_buf.lits.buffer;
 
   return res;

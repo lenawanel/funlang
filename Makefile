@@ -1,5 +1,5 @@
-CFLAGS = -ggdb -Wall -Wextra -Wconversion -Wdouble-promotion -std=c23 \
-     	 -fsanitize=undefined,address -pipe -fanalyzer
+CFLAGS = -O1 -march=native -ggdb -Wall -Wextra -Wconversion -Wdouble-promotion -std=c23 \
+     	 -fsanitize=undefined,address -pipe
 
 BUILD   = ./build
 SRC     = ./src
