@@ -1,15 +1,8 @@
 #include "lexer.h"
 #include "common.h"
-#include <assert.h>
 #include <ctype.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
 
 #define MAX_INTERN_LEN 0xff
-#define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
 typedef struct
 {
@@ -41,7 +34,7 @@ static Intern intern_strview(LexBuf *restrict lexbuf, StrView s)
   Intern i = {.idx = (uint16_t)(lexbuf->intern.len - len),
               .len = (uint16_t)(s.len << 8)};
 
-  memcpy(lexbuf->intern.buffer + lexbuf->intern.len - len, s.source,
+  memcpy(lexbuf->intern.buffer + lexbuf->intern.len - len, s.txt,
          len * sizeof(char));
 
   return i;
@@ -213,7 +206,7 @@ typedef struct ScopeStacks
       TokTag kind = hash_kw(l.source + start, len);
       if (kind == VAL_ID)
       { // we have a value ident
-        StrView s = {.source = l.source + start, .len = len};
+        StrView s = {.txt = l.source + start, .len = len};
         Intern i = intern_strview(&res_buf, s);
 
         tok.as_val_ident = i;
@@ -230,7 +223,7 @@ typedef struct ScopeStacks
              (isalnum(l.source[l.pos]) || l.source[l.pos] == '_'))
         l.pos++;
 
-      StrView s = {.source = l.source + start, .len = l.pos - start};
+      StrView s = {.txt = l.source + start, .len = l.pos - start};
       Intern i = intern_strview(&res_buf, s);
       tok.pos = start;
       tok.as_val_ident = i;

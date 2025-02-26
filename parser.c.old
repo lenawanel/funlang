@@ -1,0 +1,261 @@
+#include "lexer.h"
+#include <string.h>
+#define __FUNLANG_COMMON_H_IMPL
+#include "common.h"
+#include <assert.h>
+#include <err.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef enum ParseNodeKind
+{
+  ERROR_NODE,
+
+  FN_BIND,
+  TYPE_BIND,
+  BINDING_NAME,
+  BINDING_USE,
+  LITERAL,
+} ParseNodeKind;
+
+typedef struct __attribute__((aligned(8))) ParseNode
+{
+#pragma pack(push, 4)
+  union
+  {
+    struct
+    {
+      char *text;
+      uint32_t size;
+    } str_view;
+    uint64_t lit;
+  };
+#pragma pack(pop)
+  ParseNodeKind kind;
+  uint32_t pos;
+  uint32_t _reserved;
+} ParseNode;
+
+typedef struct ParseBuffer
+{
+  char *intern;
+
+  DynamicArray tree_buf;
+} ParseBuffer;
+
+static void push_node(ParseBuffer *restrict buf, ParseNode parse_node)
+{
+  push_elem(&buf->tree_buf, sizeof(ParseNode), &parse_node);
+}
+
+static void insert_node(ParseBuffer *restrict buf, ParseNode parse_node,
+                        uint32_t idx)
+{
+  insert_elem(&buf->tree_buf, sizeof(ParseNode), &parse_node, idx);
+}
+
+typedef struct ParseRes
+{
+  char *intern;
+
+  ParseNode *tree_buf;
+  uint32_t tree_len;
+} ParseRes;
+
+void destroy_ast(ParseRes a)
+{
+  free(a.tree_buf);
+  free(a.intern);
+}
+
+// TODO: consistently name the variants
+typedef enum
+{
+  // if this flag is set, we may just not encounter any expected value
+  NOTHING = (0x1 << 0x1f),
+  MANY = (0x1 << 0x1e),
+  // length is stored in data field
+  SEQUENCE_START = 0x1 << 0x1d,
+  // length is stored in data field
+  SEQUENCE_END = 0x1 << 0x1c,
+  // a function may be defined if this flag is set
+  RULE_FUNCTION = 0x1 << 0x1b, // TODO: is this useful?
+                               // we are expecting a value ident if flag is set
+                               // misc flag used by rules
+  MISC = 1 << 0x1a,
+
+  // a list of argumets of the for (name1: type, ..)
+  ARGBINDLIST_INTR = 0x1,
+  ARGBINDLIST_BODY = 0x2,
+  // a list of implicit arguments of the form [Type0, Type1 <: Type2, ..]
+  IMPLICIT_ARGS_BEGIN = 0x4,
+  // a block of statements optionally ending with an expression
+  RULE_BLOCK = 0x5,
+  // an arrow "->", like in the
+  RULE_ARROW = 0x6,
+  RULE_COLON = 0x7,
+  // a Type currently only supports type names
+  // TODO: make the types of all values (e.g functions) nameable
+  RULE_TYPE = 0x8,
+  RULE_VAL_ID = 0x9,
+} ParserStateKind;
+
+static ParserStateKind extract_rule(ParserStateKind st) { return st & 0xffff; }
+
+static bool flags_present(ParserStateKind st, ParserStateKind flags)
+{
+  return (st & flags) == flags;
+}
+
+typedef struct
+{
+  ParserStateKind kind;
+  uint32_t data;
+} ParserState;
+
+typedef struct
+{
+  DynamicArray stack;
+} ParseCtx;
+
+static void push_state(register ParseCtx *restrict ctx,
+                       ParserState parser_state)
+{
+  push_elem(&ctx->stack, sizeof(ParserState), &parser_state);
+}
+
+static ParserState pop_state(register ParseCtx *restrict ctx)
+{
+  ParserState p;
+  pop_elem(&ctx->stack, sizeof(ParserState), &p);
+  return p;
+}
+
+ParseRes parse(LexRes lexres)
+{
+  ParseBuffer buf = {};
+  buf.intern = lexres.intern;
+  ParseCtx ctx = {};
+
+  ParserState state = {.data = 0, .kind = RULE_FUNCTION | MANY};
+
+  push_state(&ctx, state);
+
+  Token *end = lexres.tokens + lexres.tok_num;
+
+  while ((state = pop_state(&ctx)).kind)
+  {
+    ParserState state_to_push = {};
+    ParserStateKind kind = extract_rule(state.kind);
+
+    bool matched;
+
+    ParseNode pn;
+
+    switch (kind)
+    {
+    case RULE_FUNCTION:
+      matched = lexres.tokens->tag == KW_FN;
+      if (!matched) break;
+
+      pn.pos  = lexres.tokens->pos;
+      pn.kind = FN_BIND;
+      push_node(&buf, pn);
+
+      state_to_push.kind = ARGBINDLIST_INTR;
+      state_to_push.kind = RULE_VAL_ID;
+      push_state(&ctx, state_to_push);
+
+      break;
+    case RULE_VAL_ID:
+      matched = lexres.tokens->tag == VAL_ID;
+      if (!matched) break;
+
+      Intern i = lexres.tokens->as_val_ident;
+      pn.str_view.text = buf.intern + i.idx;
+      pn.str_view.size = i.len >> 8;
+      pn.pos           = lexres.tokens->pos;
+      pn.kind          = BINDING_NAME;
+      push_node(&buf, pn);
+
+      break;
+    case ARGBINDLIST_INTR:
+      matched = lexres.tokens->tag == PAREN_O;
+      if (!matched) break;
+
+      while (++lexres.tokens <= end)
+      {
+        
+      }
+      break;
+    default:
+      err(1, "unhandled parser state");
+    }
+
+    // TODO: adopt the commented out code below
+    (void)matched;
+
+    // FIX: less hacky
+    if (++lexres.tokens > end)
+      break;
+  }
+
+  // for (uint32_t tok_idx = 0; tok_idx < lexres.tok_num;) {
+  // if (!matched && current.kind & NOTHING)
+  // { // if an optional rule didn't match, continue trying the next
+  // one
+  // if (flags_present(current.kind, SEQUENCE_START))
+  // state.stack.len -=
+  //  current.data - 1; // we didn't match the start of a sequence
+  // so we skip every other part too
+  // continue;
+  // }
+  // if (!matched)
+  //   abort(); // TODO: error handling
+
+  // if (flags_present(current.kind, SEQUENCE_END | MANY))
+  //   state.stack.len += current.data; // we matched a full reccuring sequence
+  // else if (flags_present(current.kind, MANY))
+  //   state.stack.len++; // we matched a rule that may infinitely repeat
+  //                      // so we repush this exact rule
+  //                      // in practice it's unlikely that I'll use this
+
+  ParseRes res = {.tree_buf = buf.tree_buf.buffer,
+                  .tree_len = buf.tree_buf.len,
+                  .intern = buf.intern};
+
+  return res;
+}
+
+int main(int argc, char **argv)
+{
+  if (argc < 2)
+  {
+    printf("provide a file to lex\n");
+    exit(1);
+  }
+  FILE *f = fopen(argv[1], "rb");
+  (void)fseek(f, 0, SEEK_END);
+  size_t fsize = (size_t)ftell(f);
+  (void)fseek(f, 0, SEEK_SET); // same as rewind(f);
+
+  char *string = malloc(fsize + 1);
+  (void)fread(string, fsize, 1, f);
+  (void)fclose(f);
+
+  string[fsize] = 0;
+  Lexer l = {.source = string, .pos = 0, .end = (uint32_t)fsize - 1};
+
+  {
+    LexRes lexres = lex(l);
+    free(string);
+
+    printf("lexed %d tokens\n", lexres.tok_num);
+
+    destroy_lexres(lexres);
+  }
+
+  return 0;
+}

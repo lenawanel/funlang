@@ -7,9 +7,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define PHI 1.618033988749894848204586834365638118f
+#define MIN(a, b) ((a < b) ? a : b)
+#define MAX(a, b) ((a > b) ? a : b)
+
 typedef struct
 {
-  char *source;
+  const char *txt;
   uint32_t len;
 } StrView;
 
@@ -19,17 +23,18 @@ typedef struct
   uint32_t len, cap;
 } DynamicArray;
 
-void grow_array(DynamicArray *array, size_t elem_bytes);
+void grow_array(DynamicArray *restrict array, size_t elem_bytes);
 
-uint32_t push_elem(register DynamicArray *restrict array,
-                   register size_t elem_bytes, register void *elem);
+uint32_t push_elem(DynamicArray *restrict array, size_t elem_bytes,
+                   const void *elem);
 
-void pop_elem(register DynamicArray *restrict array, register size_t elem_bytes,
-              register void *elem);
+void pop_elem(DynamicArray *restrict array, size_t elem_bytes, void *elem);
 
-void insert_elem(register DynamicArray *restrict array,
-                 register size_t elem_bytes, register void *elem,
-                 register uint32_t idx);
+void insert_elem(DynamicArray *restrict array, size_t elem_bytes,
+                 const void *elem, uint32_t idx);
+
+void append_buf(DynamicArray *restrict array, size_t elem_bytes,
+                const void *buf, size_t len);
 
 #ifdef __FUNLANG_COMMON_H_IMPL
 
@@ -42,8 +47,7 @@ static uint32_t next_pow2(uint32_t n)
 }
 
 // TODO: very questionable approach to polymorphism
-void grow_array(register DynamicArray *restrict array,
-                register size_t elem_bytes)
+void grow_array(DynamicArray *restrict array, size_t elem_bytes)
 {
   uint32_t new_cap = next_pow2(array->len);
 
@@ -56,8 +60,8 @@ void grow_array(register DynamicArray *restrict array,
   array->cap = new_cap;
 }
 
-uint32_t push_elem(register DynamicArray *restrict array,
-                   register size_t elem_bytes, register void *elem)
+uint32_t push_elem(DynamicArray *restrict array, size_t elem_bytes,
+                   const void *elem)
 {
   if (++array->len > array->cap)
     grow_array(array, elem_bytes);
@@ -67,17 +71,15 @@ uint32_t push_elem(register DynamicArray *restrict array,
   return array->len - 1;
 }
 
-void pop_elem(register DynamicArray *restrict array, register size_t elem_bytes,
-              register void *elem)
+void pop_elem(DynamicArray *restrict array, size_t elem_bytes, void *elem)
 {
   assert(array->len);
 
   memcpy(elem, array->buffer + elem_bytes * --array->len, elem_bytes);
 }
 
-void insert_elem(register DynamicArray *restrict array,
-                 register size_t elem_bytes, register void *elem,
-                 register uint32_t idx)
+void insert_elem(DynamicArray *restrict array, size_t elem_bytes,
+                 const void *elem, uint32_t idx)
 {
   assert(idx <= array->len && "OOB insert into dyn array");
 
@@ -92,6 +94,15 @@ void insert_elem(register DynamicArray *restrict array,
   memcpy(insert_start, elem, elem_bytes);
 }
 
-#endif // __FUNLANG_COMMON_H_IMPL
+void append_buf(DynamicArray *array, size_t elem_bytes, const void *buf,
+                size_t len)
+{
+  void *start = array->buffer + array->len;
+  array->len += (uint32_t)len;
+  if (array->len > array->cap)
+    grow_array(array, elem_bytes);
 
+  memcpy(start, buf, len * elem_bytes);
+}
+#endif // __FUNLANG_COMMON_H_IMPL
 #endif // __FUNLANG_COMMON_H_

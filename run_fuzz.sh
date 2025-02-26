@@ -17,7 +17,7 @@ if [[ ! "${IFS}${targets[*]}${IFS}" =~ "${IFS}$1${IFS}" ]]; then
   exit 1
 fi
 
-afl-fuzz -i fuzzer_corpus -o afl-out -- build/${1}_harness
+afl-fuzz -i - -o afl-out -- build/${1}_harness
 
 unset IFS
 unset ALF_SKIP_CPUFREQ
