@@ -1,23 +1,27 @@
 CFLAGS = -ggdb -Wall -Wextra -Wconversion -Wdouble-promotion -std=c23 \
      	 -fsanitize=undefined,address -pipe -fanalyzer
+
+BUILD   = ./build
+SRC     = ./src
+
+CC      = gcc
+
+objects = $(BUILD)/hashtable.o $(BUILD)/lexer.o
      	 
-build/parser: parser.c build/lexer.o  build/hashtable.o common.h build
-	gcc $(CFLAGS) parser.c -o build/parser build/lexer.o build/hashtable.o
+$(BUILD)/parser: $(SRC)/parser.c $(objects) $(SRC)/common.h $(BUILD)
+	$(CC) $(CFLAGS) $(SRC)/parser.c $(objects) -o $@ 
 
-build/lexer.o: lexer.c lexer.h common.h build
-	gcc $(CFLAGS) -c lexer.c -o build/lexer.o
+$(objects): $(BUILD)/%.o: $(SRC)/%.c $(SRC)/%.h $(SRC)/common.h $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-build/hashtable.o: hashtable.c hashtable.h common.h build
-	gcc $(CFLAGS) -c hashtable.c -o build/hashtable.o
+$(BUILD)/lexer_harness: $(BUILD)/afl_lexer.o $(BUILD)
+	afl-clang-lto -std=c23 -O3 -march=native -DNDEBUG $(BUILD)/afl_lexer.o $(SRC)/lexer_harness.c -o $@
 
-build/lexer_harness: build/afl_lexer.o build
-	afl-clang-lto -std=c23 -O3 -march=native -DNDEBUG build/afl_lexer.o lexer_harness.c -o build/lexer_harness
+$(BUILD)/afl_lexer.o: $(SRC)/lexer.c $(SRC)/lexer.h $(SRC)/common.h $(BUILD)
+	afl-clang-lto -std=c23 -O3 -march=native -DNDEBUG -c $(SRC)/lexer.c -o $@
 
-build/afl_lexer.o: lexer.c lexer.h common.h build
-	afl-clang-lto -std=c23 -O3 -march=native -DNDEBUG -c lexer.c -o build/afl_lexer.o
-
-build:
-	mkdir build
+$(BUILD):
+	mkdir $(BUILD)
 
 .PHONY: clean fuzz
 
