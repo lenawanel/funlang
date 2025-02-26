@@ -265,7 +265,7 @@ typedef struct ScopeStacks
       tok.as_str_lit = i;
       tok.tag |= TOK_LIT_INT;
     }
-    else if (char_at == '(' || char_at == '{' || char_at == '[')
+    else if (strchr("({[", char_at))
     {
 
       uint8_t hash = (uint8_t)((char_at & 0xf) + (char_at >> 4));
@@ -280,7 +280,7 @@ typedef struct ScopeStacks
       tok.pos = l.pos++;
       tok.tag = (uint32_t)char_at;
     }
-    else if (char_at == ')' || char_at == '}' || char_at == ']')
+    else if (strchr(")}]", char_at))
     {
 
       uint8_t hash = (uint8_t)((char_at & 0xf) + (char_at >> 4));
@@ -352,7 +352,7 @@ typedef struct ScopeStacks
   LexRes res;
   res.intern = res_buf.intern.buffer;
   res.tokens = res_buf.tokens.buffer;
-  res.tkeptr = res_buf.tokens.buffer + res_buf.tokens.len;
+  res.tkeptr = res_buf.tokens.buffer + res_buf.tokens.len * sizeof(Token);
   res.lits = res_buf.lits.buffer;
 
   return res;

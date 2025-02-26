@@ -70,11 +70,7 @@ bool insert_str(HSet *restrict hs, StrView str)
     grow(hs);
 
   uint32_t cap_mask = hs->encap - 1;
-  printf("cap_mask: %b\n", cap_mask);
-  printf("hs->encap: %x\n", hs->encap);
   uint32_t idx = fnv_32_str(str) & cap_mask;
-  printf("idx: %x\n", idx);
-  printf("hs->entrs: %p\n", hs->entrs);
 
   for (SetEntry ent = hs->entrs[idx]; ent.skey.txt; idx = (idx + 1) & cap_mask)
   {

@@ -223,6 +223,7 @@ int main(int argc, char **argv)
 
   Lexer l = {.source = string, .pos = 0, .end = (uint32_t)fsize - 1};
   LexRes lr = lex(l);
+  printf("found %lu tokens\n", lr.tkeptr - lr.tokens);
   for (Token* tok = lr.tokens; tok < lr.tkeptr; ++tok)
   {
     printf("0x%x ", tok->tag & 0xff);

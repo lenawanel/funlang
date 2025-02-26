@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <stdbit.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -97,12 +98,12 @@ void insert_elem(DynamicArray *restrict array, size_t elem_bytes,
 void append_buf(DynamicArray *array, size_t elem_bytes, const void *buf,
                 size_t len)
 {
-  void *start = array->buffer + array->len * elem_bytes;
+  size_t start_idx = array->len * elem_bytes;
   array->len += (uint32_t)len;
   if (array->len > array->cap)
     grow_array(array, elem_bytes);
 
-  memcpy(start, buf, len * elem_bytes);
+  memcpy(array->buffer + start_idx, buf, len * elem_bytes);
 }
 #endif // __FUNLANG_COMMON_H_IMPL
 #endif // __FUNLANG_COMMON_H_
