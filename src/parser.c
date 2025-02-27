@@ -20,6 +20,23 @@ typedef struct
   DynamicArray exprs;
 } ParseBuf;
 
+typedef struct
+{
+  FunctionDef *funcs;
+
+  ImplicitArg *iargs;
+  ExplicitArg *eargs;
+
+  ParsedType *types;
+
+  Statement *stmts;
+  Expression *exprs;
+
+  uint32_t funcs_len, iargs_len, eargs_len, types_len, stmts_len, exprs_len;
+
+  HSet strings;
+} ParseRes;
+
 static StrView insert_intern(HSet *hs, char *intrn, Intern i)
 {
   return insert(hs, i.idx + intrn, i.len >> 8);
@@ -181,7 +198,7 @@ static void parse_fn(ParseBuf *buf, LexRes *lr, HSet *hs)
   push_elem(&buf->funcs, sizeof(fn), &fn);
 }
 
-[[nodiscard("has to be freed")]] ParseBuf parse(LexRes lr)
+[[nodiscard("has to be freed")]] ParseRes parse(LexRes lr)
 {
   ParseBuf buf = {};
   // TODO: hacky
@@ -207,7 +224,29 @@ static void parse_fn(ParseBuf *buf, LexRes *lr, HSet *hs)
     }
   }
 
-  return buf;
+  ParseRes res = {
+      .funcs = buf.funcs.buffer,
+      .funcs_len = buf.funcs.len,
+
+      .iargs = buf.iargs.buffer,
+      .iargs_len = buf.eargs.len,
+
+      .eargs = buf.eargs.buffer,
+      .eargs_len = buf.eargs.len,
+
+      .types = buf.types.buffer,
+      .types_len = buf.types.len,
+
+      .stmts = buf.stmts.buffer,
+      .stmts_len = buf.stmts.len,
+
+      .exprs = buf.exprs.buffer,
+      .exprs_len = buf.exprs.len,
+
+      .strings = hs,
+  };
+
+  return res;
 }
 
 int main(int argc, char **argv)
@@ -227,22 +266,27 @@ int main(int argc, char **argv)
 
   Lexer l = {.src = string, .cur = string, .end = string + fsize};
   LexRes lr = lex(l);
+
+  free(string);
+
   printf("found %lu tokens\n", lr.tkeptr - lr.tokens);
   for (Token *tok = lr.tokens; tok < lr.tkeptr; ++tok)
   {
     printf("0x%x ", tok->tag & 0xff);
   }
   printf("\n");
-  ParseBuf parseres = parse(lr);
+  ParseRes parseres = parse(lr);
   destroy_lexres(lr);
 
-  free(parseres.funcs.buffer);
-  free(parseres.eargs.buffer);
-  free(parseres.iargs.buffer);
-  free(parseres.types.buffer);
-  free(parseres.stmts.buffer);
-  free(parseres.exprs.buffer);
+  free(parseres.funcs);
+  free(parseres.eargs);
+  free(parseres.iargs);
+  free(parseres.types);
+  free(parseres.stmts);
+  free(parseres.exprs);
 
-  free(string);
+  free_hset(parseres.strings);
+
+  
   return 0;
 }

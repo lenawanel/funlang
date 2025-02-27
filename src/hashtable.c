@@ -121,3 +121,10 @@ StrView insert(HSet *restrict hs, char *to_insert, uint32_t len)
 
   return (StrView){.txt = txt, .len = len};
 }
+
+
+void free_hset(HSet hs)
+{
+  munmap(hs.entrs, hs.encap);
+  free(hs.intrn.buffer);
+}

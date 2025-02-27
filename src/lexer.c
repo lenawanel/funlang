@@ -2,7 +2,6 @@
 #include "common.h"
 #include <ctype.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 
 #define MAX_INTERN_LEN 0xff
@@ -190,7 +189,6 @@ typedef struct ScopeStacks
     Token tok = {0};
 
     char char_at = *l.cur;
-    printf("lexer @ %c\n", char_at);
 
     // TODO: clean up this stuff, it's ugly
     if (isspace(char_at))

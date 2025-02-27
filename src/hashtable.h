@@ -16,3 +16,4 @@ typedef struct
 bool insert_str(HSet *restrict hs, StrView str);
 StrView insert(HSet *restrict hs, char *text, uint32_t len);
 bool remove_str(HSet *restrict hs, StrView str);
+void free_hset(HSet hs);
