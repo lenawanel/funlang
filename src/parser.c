@@ -1,7 +1,6 @@
 #define __FUNLANG_COMMON_H_IMPL
 #include "parser.h"
 #include "common.h"
-#include "lexer.h"
 #include <err.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -54,11 +53,22 @@ bool is_at(LexRes *lr, TokTag tag)
 static void parse_type(ParseBuf *buf, LexRes *lr, HSet *hs)
 {
   // TODO: more complex types
-  Token tok = expect_token(lr, TOK_TYPE_ID);
+  Token tok = *lr->tokens++;
+
   ParsedType type = {};
-  type.kind = NAMED;
-  type.as_named = insert_intern(hs, lr->intern, tok.as_typ_ident);
-  push_elem(&buf->types, sizeof(ParsedType), &type);
+  switch (tok.tag & 0xff)
+  {
+  case TOK_TYPE_ID:
+    type.kind = NAMED;
+    type.as_named = insert_intern(hs, lr->intern, tok.as_typ_ident);
+    break;
+
+  default:
+    type.kind = INBUILT;
+    type.as_inbuilt = tok.tag & 0xff;
+  }
+
+  push_elem(&buf->types, sizeof(type), &type);
 }
 
 static uint32_t parse_implicit_args(ParseBuf *, LexRes *, HSet *)
@@ -98,19 +108,29 @@ static uint32_t parse_explicit_args(ParseBuf *buf, LexRes *lr, HSet *hs)
 
 struct
 {
-  uint8_t l, r; } infix_binding_power(char op)
+  uint8_t l, r;
+} infix_binding_power(char op)
 {
-  uint8_t l[255] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3};
+  uint8_t l[255] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 1};
 
-  uint8_t r[255] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4};
+  uint8_t r[255] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 2};
 
   uint8_t op_idx = (uint8_t)op;
 
   return (typeof(infix_binding_power(0))){.l = l[op_idx], .r = r[op_idx]};
+}
+
+uint8_t prefix_binding_power(char op)
+{
+  uint8_t p[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5};
+
+  return p[(uint8_t)op];
 }
 
 [[nodiscard]] static uint32_t parse_expr(ParseBuf *buf, LexRes *lr, HSet *hs,
@@ -119,27 +139,40 @@ struct
   uint32_t lhs;
   // TODO: other kinds of expressions
   Expression expr = {};
-  switch (lr->tokens->tag & 0xff)
+  Token first_tok = *lr->tokens++;
+  switch (first_tok.tag & 0xff)
   {
   case TOK_LIT_INT:
     expr.kind = LIT_INT;
-    Token lit = expect_token(lr, TOK_LIT_INT);
-    expr.as_lit_int = lr->lits[lit.as_lit_idx >> 8];
+    expr.as_lit_int = lr->lits[first_tok.as_lit_idx >> 8];
+
     lhs = push_elem(&buf->exprs, sizeof(expr), &expr);
     break;
 
   case TOK_VAL_ID:
     expr.kind = BIND_USE;
-    Token idn = expect_token(lr, TOK_VAL_ID);
-    expr.as_bind_use = insert_intern(hs, lr->intern, idn.as_val_ident);
+    expr.as_bind_use = insert_intern(hs, lr->intern, first_tok.as_val_ident);
+
     lhs = push_elem(&buf->exprs, sizeof(expr), &expr);
     break;
 
-  default:
-    err(1,
-        "encountered unexpected "
-        "token 0x%02x while parsing expr",
-        lr->tokens->tag);
+  case TOK_PAREN_O:
+    lhs = parse_expr(buf, lr, hs, delim, 0);
+    expect_token(lr, ')');
+    break;
+
+  default: // TODO: actually validat that this is a valid prefix op
+    char op = (char)(first_tok.tag & 0xff);
+    expr.kind = UNARY_EXPR;
+    expr.as_una_expr.op = op;
+    uint8_t r_bp = prefix_binding_power(op);
+
+    assert(r_bp && "encountered unexpected token"
+                   " while parsing an expression");
+
+    expr.as_una_expr.operand = parse_expr(buf, lr, hs, delim, r_bp);
+
+    lhs = push_elem(&buf->exprs, sizeof(expr), &expr);
   }
 
   while (lr->tokens < lr->tkeptr && !is_at(lr, delim))

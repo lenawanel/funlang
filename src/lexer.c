@@ -153,15 +153,33 @@ static TokTag hash_kw(const char *s, uint32_t len)
   // TODO: efficient perfect hash
   if (len != 2 && len != 6 && len != 3 && len != 4)
     ; // we don't have a keyword
-  else if (!strncmp(s, "return", len))
+  else if (!memcmp(s, "return", len))
     return TOK_KW_RETRN;
-  else if (!strncmp(s, "as", len))
-    return TOK_KW_AS;
-  else if (!strncmp(s, "let", len))
+  else if (!memcmp(s, "ass", len))
+    return TOK_KW_ASS;
+  else if (!memcmp(s, "asu", len))
+    return TOK_KW_ASU;
+  else if (!memcmp(s, "u8", len))
+    return TOK_KW_U8;
+  else if (!memcmp(s, "u16", len))
+    return TOK_KW_U16;
+  else if (!memcmp(s, "u32", len))
+    return TOK_KW_U32;
+  else if (!memcmp(s, "u64", len))
+    return TOK_KW_U64;
+  else if (!memcmp(s, "s8", len))
+    return TOK_KW_S8;
+  else if (!memcmp(s, "s16", len))
+    return TOK_KW_S16;
+  else if (!memcmp(s, "s32", len))
+    return TOK_KW_S32;
+  else if (!memcmp(s, "s64", len))
+    return TOK_KW_S64;
+  else if (!memcmp(s, "let", len))
     return TOK_KW_LET;
-  else if (!strncmp(s, "fn", len))
+  else if (!memcmp(s, "fn", len))
     return TOK_KW_FN;
-  else if (!strncmp(s, "hole", len))
+  else if (!memcmp(s, "hole", len))
     return TOK_KW_HOLE;
 
   return TOK_VAL_ID;

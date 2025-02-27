@@ -39,14 +39,25 @@ typedef  enum {
                        // is indicatated by the corrresponding tag
                        // representation having its highest bit set
   TOK_KW_FN    = 0x81,
-  TOK_KW_AS    = 0x82,
-  TOK_KW_LET   = 0x83,
-  TOK_KW_RETRN = 0x84,
-  TOK_KW_ARROW = 0x85,
-  TOK_KW_SUBTY = 0x86,
-  TOK_KW_SHIFR = 0x87,
-  TOK_KW_SHIFL = 0x87,
-  TOK_KW_HOLE  = 0x88,
+  TOK_KW_ASS   = 0x82,
+  TOK_KW_ASU   = 0x83,
+  TOK_KW_LET   = 0x84,
+  TOK_KW_RETRN = 0x85,
+  TOK_KW_ARROW = 0x86,
+  TOK_KW_SUBTY = 0x87,
+  TOK_KW_SHIFR = 0x88,
+  TOK_KW_SHIFL = 0x89,
+  TOK_KW_HOLE  = 0x8a,
+
+  TOK_KW_U8   = 0xa0,
+  TOK_KW_U16  = 0xa1,
+  TOK_KW_U32  = 0xa2,
+  TOK_KW_U64  = 0xa3,
+
+  TOK_KW_S8   = 0xa0,
+  TOK_KW_S16  = 0xa1,
+  TOK_KW_S32  = 0xa2,
+  TOK_KW_S64  = 0xa3,
 } TokTag;
 
 typedef struct Token {

@@ -1,4 +1,5 @@
 #include "common.h"
+#include "lexer.h"
 #include "hashtable.h"
 
 typedef struct
@@ -34,6 +35,13 @@ typedef struct
   union
   {
     StrView as_named;
+    enum
+    {
+      U8  = TOK_KW_U8,  U16 = TOK_KW_U16,
+      U32 = TOK_KW_U32, U64 = TOK_KW_U64,
+      S8  = TOK_KW_S8,  S16 = TOK_KW_S16,
+      S32 = TOK_KW_S32, S64 = TOK_KW_S64,
+    } as_inbuilt;
   };
 } ParsedType;
 
@@ -57,11 +65,18 @@ typedef struct
   };
 } Statement;
 
-typedef struct {
+typedef struct
+{
   uint32_t rhs;
   uint32_t lhs;
   char op;
-} BinExpr; 
+} BinExpr;
+
+typedef struct
+{
+  uint32_t operand;
+  char op;
+} UnaExpr;
 
 typedef struct
 {
@@ -71,6 +86,7 @@ typedef struct
     BIND_USE,
     APPLICATION,
     BINARY_EXPR,
+    UNARY_EXPR,
   } kind;
 
   union
@@ -78,6 +94,7 @@ typedef struct
     uint64_t as_lit_int;
     StrView as_bind_use;
     BinExpr as_bin_expr;
+    UnaExpr as_una_expr;
   };
 } Expression;
 
