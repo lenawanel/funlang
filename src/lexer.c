@@ -1,6 +1,8 @@
 #include "lexer.h"
 #include "common.h"
 #include <ctype.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #define MAX_INTERN_LEN 0xff
@@ -62,43 +64,54 @@ static bool consume_ws(Lexer *restrict l)
 {
   bool skipped = false;
 
-  while (l->pos < l->end && isspace(l->source[l->pos]))
+  while (l->cur < l->end && isspace(*l->cur))
   {
     skipped = true;
-    l->pos++;
+    l->cur++;
   }
 
   return skipped;
 }
 
-static bool consume_comment(Lexer *restrict l)
+static bool consume_char(Lexer *restrict l, char c)
 {
-  if (l->pos + 1 > l->end)
+  if (l->cur + 1 > l->end)
     return false;
 
-  if (l->source[l->pos] == '/')
+  if (*l->cur == c)
   {
-    l->pos++;
+    l->cur++;
+    return true;
+  }
+  else
+  {
+    return false;
+  }
+}
 
-    if (l->source[l->pos] == '/')
+static bool consume_comment(Lexer *restrict l)
+{
+  if (l->cur + 1 > l->end)
+    return false;
+
+  if (consume_char(l, '/'))
+  {
+    if (consume_char(l, '/'))
     { // single line comment
-      l->pos++;
 
-      while (l->pos < l->end && l->source[l->pos] != '\n')
-        l->pos++; // consume until newline
+      while (l->cur < l->end && *l->cur != '\n')
+        l->cur++; // consume until newline
+
+      l->cur++; // consume remaining newline
       return true;
     }
-    else if (l->source[l->pos] == '*')
+    else if (consume_char(l, '*'))
     {
-      l->pos++;
-
-      while (++l->pos < l->end)
-      {
-        if (l->pos + 1 >= l->end || !memcmp("*/", &l->source[l->pos], 2))
+      while (++l->cur + 1 < l->end)
+        if (!memcmp("*/", l->cur, 2))
           break; // consume matching comment close
-      }
 
-      l->pos++;
+      l->cur += 2;
       return true;
     }
   }
@@ -168,100 +181,99 @@ typedef struct ScopeStacks
   LexBuf res_buf = {};
   ScopeStacks scopes = {0};
 
-  while (l.pos < l.end)
+  while (l.cur < l.end)
   {
-    bool skippeable = true;
-    // skip all whitespace and comments
-    while (skippeable)
-    {
-      skippeable = consume_ws(&l);
-      skippeable |= consume_comment(&l);
-    }
 
-    if (l.pos >= l.end)
+    if (l.cur >= l.end)
       break;
 
     Token tok = {0};
 
-    char char_at = l.source[l.pos];
+    char char_at = *l.cur;
+    printf("lexer @ %c\n", char_at);
 
     // TODO: clean up this stuff, it's ugly
-    if (isdigit(char_at))
+    if (isspace(char_at))
+    {
+      consume_ws(&l);
+      continue;
+    }
+    else if (char_at == '/')
+    {
+      if (consume_comment(&l))
+        continue;
+      goto punct;
+    }
+    else if (isdigit(char_at))
     { // TODO: convert this into a jump table
       // we are lexing a number
-      char *end;
-      char *start = l.source + l.pos;
+      char *start = l.cur;
       // TODO: strtoll does not have a max len, so this
       //       will evoke ub when there is a number right
       //       before eof and `l.source` isn't null terminated
-      uint64_t num = (uint64_t)strtoll(start, &end, 0);
+      uint64_t num = (uint64_t)strtoll(start, &l.cur, 0);
       uint32_t idx = push_lit(&res_buf, num);
-      tok.pos = l.pos;
+      tok.pos = (uint32_t)(l.src - l.cur);
       tok.as_lit_idx = idx;
       tok.tag |= TOK_LIT_INT;
-
-      l.pos += (uint32_t)(end - start);
     }
     else if (islower(char_at))
     {
       // we are lexing a value ident or a keyword
-      uint32_t start = l.pos;
-      while (l.pos < l.end &&
-             (isalnum(l.source[l.pos]) || l.source[l.pos] == '_'))
-        l.pos++;
+      char *start = l.cur;
+      while (l.cur < l.end && (isalnum(*l.cur) || *l.cur == '_'))
+        l.cur++;
 
-      uint32_t len = l.pos - start;
+      uint32_t len = (uint32_t)(l.cur - start);
 
-      TokTag kind = hash_kw(l.source + start, len);
+      TokTag kind = hash_kw(start, len);
       if (kind == TOK_VAL_ID)
       { // we have a value ident
-        StrView s = {.txt = l.source + start, .len = len};
+        StrView s = {.txt = start, .len = len};
         Intern i = intern_strview(&res_buf, s);
 
         tok.as_val_ident = i;
       }
 
       tok.tag |= kind;
-      tok.pos = start;
+      tok.pos = (uint32_t)(l.src - start);
     }
     else if (isupper(char_at))
     {
       // we are lexing a Type ident
-      uint32_t start = l.pos;
-      while (l.pos < l.end &&
-             (isalnum(l.source[l.pos]) || l.source[l.pos] == '_'))
-        l.pos++;
+      char *start = l.cur;
+      while (l.cur < l.end && (isalnum(*l.cur) || *l.cur == '_'))
+        l.cur++;
 
-      StrView s = {.txt = l.source + start, .len = l.pos - start};
+      StrView s = {.txt = start, .len = (uint32_t)(l.cur - start)};
       Intern i = intern_strview(&res_buf, s);
-      tok.pos = start;
+      tok.pos = (uint32_t)(l.src - start);
       tok.as_val_ident = i;
       tok.tag |= TOK_TYPE_ID;
     }
     else if (char_at == '"')
     {
-      uint32_t start = ++l.pos; // skip first quote
+      char *start = ++l.cur; // skip first quote
       uint16_t mark = intern_mark(res_buf);
 
       bool escaped = false;
-      while (l.pos < l.end && !(l.source[l.pos] == '"' && !escaped))
+      while (l.cur < l.end && !(*l.cur == '"' && !escaped))
       {
         if (escaped)
         {
-          char *start = l.source + l.pos;
-          char *end = start;
-          char c = unescape(&end);
-          l.pos += (uint32_t)(end - start);
+          char c = unescape(&l.cur);
           intern_char(&res_buf, c);
           escaped = false;
           continue;
         }
-        escaped = l.source[l.pos] == '\\';
-        l.pos++;
+        intern_char(&res_buf, *l.cur);
+        escaped = *l.cur == '\\';
+        l.cur++;
       }
-      Intern i = {.idx = mark, .len = (uint16_t)((mark - l.pos) << 8)};
-      l.pos++; // skip last quote
-      tok.pos = start;
+      Intern i = {.idx = mark,
+                  .len = (uint16_t)((uint16_t)(l.cur - start) << 8u)};
+      l.cur++; // skip closing quote
+      tok.pos = (uint32_t)(l.src - start);
       tok.as_str_lit = i;
       tok.tag |= TOK_LIT_INT;
     }
@@ -277,7 +289,7 @@ typedef struct ScopeStacks
         goto next_token; // scope exceeded max depth,
                          // so this token is INVALID
       scopes.stacks[hash][cursor] = res_buf.tokens.len;
-      tok.pos = l.pos++;
+      tok.pos = (uint32_t)(l.src - l.cur++);
       tok.tag = (uint32_t)char_at;
     }
     else if (strchr(")}]", char_at))
@@ -305,18 +317,20 @@ typedef struct ScopeStacks
       ((Token *)res_buf.tokens.buffer)[opening_delim].matching_scp |=
           (int32_t)((res_buf.tokens.len - opening_delim) << 8);
 
-      tok.pos = l.pos++;
+      tok.pos = (uint32_t)(l.src - l.cur++);
       tok.tag = (uint32_t)char_at;
       tok.matching_scp |= (int32_t)((opening_delim - res_buf.tokens.len) << 8);
     }
     else if (ispunct(char_at))
     {
-      tok.pos = l.pos++;
+    punct:
+      tok.pos = (uint32_t)(l.src - l.cur++);
       if (char_at == '-')
       {
-        if (l.source[l.pos] == '>')
+        if (*l.cur == '>')
         {
           tok.tag = TOK_KW_ARROW;
+          l.cur++;
         }
         else
         {
@@ -325,9 +339,10 @@ typedef struct ScopeStacks
       }
       else if (char_at == '<')
       {
-        if (l.source[l.pos] == ':')
+        if (*l.cur == ':')
         {
           tok.tag = TOK_KW_SUBTY;
+          l.cur++;
         }
         else
         {
@@ -338,11 +353,10 @@ typedef struct ScopeStacks
       {
         tok.tag = (uint32_t)char_at;
       }
-      l.pos++;
     }
     else
     {
-      l.pos++;
+      l.cur++;
     }
 
   next_token:

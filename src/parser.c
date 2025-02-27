@@ -4,6 +4,7 @@
 #include "hashtable.h"
 #include "lexer.h"
 #include <err.h>
+#include <stddef.h>
 #include <stdio.h>
 
 typedef struct
@@ -64,10 +65,12 @@ static uint32_t parse_explicit_args(ParseBuf *buf, LexRes *lr, HSet *hs)
 {
   uint32_t len = 0;
   Token intro = expect_token(lr, '(');
-  Token *end = lr->tokens + intro.matching_scp;
+  ptrdiff_t matching = intro.matching_scp >> 8;
+  Token *end = lr->tokens + matching;
 
-  while (lr->tokens < end)
+  while (++lr->tokens < end)
   {
+    printf("we shouldn't be here\n");
     ExplicitArg earg = {};
 
     Token name = expect_token(lr, TOK_VAL_ID);
@@ -83,8 +86,6 @@ static uint32_t parse_explicit_args(ParseBuf *buf, LexRes *lr, HSet *hs)
     push_elem(&buf->eargs, sizeof(earg), &earg);
     len++;
   }
-
-  expect_token(lr, ')');
 
   return len;
 }
@@ -108,26 +109,31 @@ static void parse_stmt(ParseBuf *buf, LexRes *lr, HSet *hs)
     err(1, "encountered unexpected "
            "eof while parsing statement");
 
-  switch ((lr->tokens++->tag & 0xff))
+  Token *start = lr->tokens++;
+  switch (start->tag & 0xff)
   {
   case TOK_KW_RETRN:
     parse_expr(buf, lr, hs, ';');
-    expect_token(lr, ';');
-
     break;
 
-    // TODO: case KW_LET:
+    // TODO: case TOK_KW_LET:
 
   default:
-    err(1, "encountered unexpected token %c", (lr->tokens->tag & 0xff));
+    err(1,
+        "encountered unexpected token"
+        " while parsing satement: 0x%x",
+        (start->tag & 0xff));
   }
+
+  expect_token(lr, ';');
 }
 
 static uint32_t parse_block(ParseBuf *buf, LexRes *lr, HSet *hs)
 {
   uint32_t len = 0;
   Token intro = expect_token(lr, '{');
-  Token *end = lr->tokens + intro.matching_scp;
+  ptrdiff_t matching = intro.matching_scp >> 8;
+  Token *end = lr->tokens + matching;
 
   while (lr->tokens < end)
   {
@@ -165,6 +171,7 @@ static void parse_fn(ParseBuf *buf, LexRes *lr, HSet *hs)
     err(1, "encountered unexpected eof while parsing function");
 
   Token arr_or_bl = *(lr->tokens++);
+
   if ((arr_or_bl.tag & 0xff) == TOK_KW_ARROW)
   {
     fn.type = buf->types.len;
@@ -221,10 +228,10 @@ int main(int argc, char **argv)
 
   string[fsize] = 0;
 
-  Lexer l = {.source = string, .pos = 0, .end = (uint32_t)fsize - 1};
+  Lexer l = {.src = string, .cur = string, .end = string + fsize};
   LexRes lr = lex(l);
   printf("found %lu tokens\n", lr.tkeptr - lr.tokens);
-  for (Token* tok = lr.tokens; tok < lr.tkeptr; ++tok)
+  for (Token *tok = lr.tokens; tok < lr.tkeptr; ++tok)
   {
     printf("0x%x ", tok->tag & 0xff);
   }

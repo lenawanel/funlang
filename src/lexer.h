@@ -1,9 +1,9 @@
 #include <stdint.h>
 
 typedef struct Lexer {
-  char* source;
-  uint32_t pos;
-  uint32_t end;
+  char* src;
+  char* cur;
+  char* end;
 } Lexer;
 
 typedef struct Intern {
