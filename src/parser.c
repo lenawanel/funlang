@@ -70,7 +70,6 @@ static uint32_t parse_explicit_args(ParseBuf *buf, LexRes *lr, HSet *hs)
 
   while (++lr->tokens < end)
   {
-    printf("we shouldn't be here\n");
     ExplicitArg earg = {};
 
     Token name = expect_token(lr, TOK_VAL_ID);
@@ -135,14 +134,12 @@ static uint32_t parse_block(ParseBuf *buf, LexRes *lr, HSet *hs)
   ptrdiff_t matching = intro.matching_scp >> 8;
   Token *end = lr->tokens + matching;
 
-  while (lr->tokens < end)
+  while (lr->tokens < end && !opt_munch_token(lr, '}'))
   {
     parse_stmt(buf, lr, hs);
 
     len++;
   }
-
-  expect_token(lr, '}');
 
   return len;
 }

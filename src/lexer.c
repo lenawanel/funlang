@@ -179,7 +179,7 @@ typedef struct ScopeStacks
 [[nodiscard]] LexRes lex(Lexer l)
 {
   LexBuf res_buf = {};
-  ScopeStacks scopes = {0};
+  ScopeStacks scopes = {};
 
   while (l.cur < l.end)
   {

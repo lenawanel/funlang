@@ -50,7 +50,7 @@ static uint32_t next_pow2(uint32_t n)
 // TODO: very questionable approach to polymorphism
 void grow_array(DynamicArray *restrict array, size_t elem_bytes)
 {
-  uint32_t new_cap = next_pow2(array->len);
+  uint32_t new_cap = next_pow2(array->len + 1);
 
   void *new_buf = realloc(array->buffer, elem_bytes * new_cap);
 
