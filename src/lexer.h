@@ -20,9 +20,10 @@ typedef  enum {
   TOK_VAL_ID   = 0x8,
   TOK_TYPE_ID  = 0x9,
 
-  TOK_HYPHON   = '-',
   TOK_PAREN_O  = '(',
   TOK_PAREN_C  = ')',
+  TOK_PLUS     = '+',
+  TOK_HYPHON   = '-',
   TOK_COLON    = ':',
   TOK_SEMI     = ';',
   TOK_BRACK_O  = '[',
@@ -43,6 +44,9 @@ typedef  enum {
   TOK_KW_RETRN = 0x84,
   TOK_KW_ARROW = 0x85,
   TOK_KW_SUBTY = 0x86,
+  TOK_KW_SHIFR = 0x87,
+  TOK_KW_SHIFL = 0x87,
+  TOK_KW_HOLE  = 0x88,
 } TokTag;
 
 typedef struct Token {

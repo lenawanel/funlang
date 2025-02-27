@@ -1,7 +1,6 @@
 #define __FUNLANG_COMMON_H_IMPL
 #include "parser.h"
 #include "common.h"
-#include "hashtable.h"
 #include "lexer.h"
 #include <err.h>
 #include <stddef.h>
@@ -20,23 +19,6 @@ typedef struct
   DynamicArray exprs;
 } ParseBuf;
 
-typedef struct
-{
-  FunctionDef *funcs;
-
-  ImplicitArg *iargs;
-  ExplicitArg *eargs;
-
-  ParsedType *types;
-
-  Statement *stmts;
-  Expression *exprs;
-
-  uint32_t funcs_len, iargs_len, eargs_len, types_len, stmts_len, exprs_len;
-
-  HSet strings;
-} ParseRes;
-
 static StrView insert_intern(HSet *hs, char *intrn, Intern i)
 {
   return insert(hs, i.idx + intrn, i.len >> 8);
@@ -46,6 +28,7 @@ Token expect_token(LexRes *lr, TokTag tag)
 {
   Token tok = *lr->tokens++;
 
+  printf("0x%02x == 0x%02x\n", tok.tag & 0xff, tag);
   // TODO: proper error handling
   assert((tok.tag & 0xff) == tag);
   return tok;
@@ -60,6 +43,12 @@ bool opt_munch_token(LexRes *lr, TokTag tag)
     lr->tokens++;
 
   return matched;
+}
+
+bool is_at(LexRes *lr, TokTag tag)
+{
+  Token tok = *lr->tokens;
+  return (tok.tag & 0xff) == tag;
 }
 
 static void parse_type(ParseBuf *buf, LexRes *lr, HSet *hs)
@@ -85,7 +74,8 @@ static uint32_t parse_explicit_args(ParseBuf *buf, LexRes *lr, HSet *hs)
   ptrdiff_t matching = intro.matching_scp >> 8;
   Token *end = lr->tokens + matching;
 
-  while (++lr->tokens < end)
+  while (lr->tokens < end &&
+         !opt_munch_token(lr, ')')) // TODO: fix lexer matching scope
   {
     ExplicitArg earg = {};
 
@@ -106,17 +96,69 @@ static uint32_t parse_explicit_args(ParseBuf *buf, LexRes *lr, HSet *hs)
   return len;
 }
 
-static void parse_expr(ParseBuf *buf, LexRes *lr, HSet *hs, TokTag tag)
+struct
 {
-  (void)tag;
-  (void)hs;
-  (void)buf;
+  uint8_t l, r; } infix_binding_power(char op)
+{
+  uint8_t l[255] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3};
+
+  uint8_t r[255] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4};
+
+  uint8_t op_idx = (uint8_t)op;
+
+  return (typeof(infix_binding_power(0))){.l = l[op_idx], .r = r[op_idx]};
+}
+
+[[nodiscard]] static uint32_t parse_expr(ParseBuf *buf, LexRes *lr, HSet *hs,
+                                         TokTag delim, uint8_t min_bp)
+{
+  uint32_t lhs;
   // TODO: other kinds of expressions
   Expression expr = {};
-  expr.kind = LIT_INT;
-  Token lit = expect_token(lr, TOK_LIT_INT);
-  expr.as_lit_int = lr->lits[lit.as_lit_idx >> 8];
-  push_elem(&buf->exprs, sizeof(expr), &expr);
+  switch (lr->tokens->tag & 0xff)
+  {
+  case TOK_LIT_INT:
+    expr.kind = LIT_INT;
+    Token lit = expect_token(lr, TOK_LIT_INT);
+    expr.as_lit_int = lr->lits[lit.as_lit_idx >> 8];
+    lhs = push_elem(&buf->exprs, sizeof(expr), &expr);
+    break;
+
+  case TOK_VAL_ID:
+    expr.kind = BIND_USE;
+    Token idn = expect_token(lr, TOK_VAL_ID);
+    expr.as_bind_use = insert_intern(hs, lr->intern, idn.as_val_ident);
+    lhs = push_elem(&buf->exprs, sizeof(expr), &expr);
+    break;
+
+  default:
+    err(1,
+        "encountered unexpected "
+        "token 0x%02x while parsing expr",
+        lr->tokens->tag);
+  }
+
+  while (lr->tokens < lr->tkeptr && !is_at(lr, delim))
+  {
+    char op = (char)(lr->tokens->tag & 0xff);
+    expr.kind = BINARY_EXPR;
+    expr.as_bin_expr.op = op;
+    expr.as_bin_expr.lhs = lhs;
+
+    typeof(infix_binding_power(op)) bp = infix_binding_power(op);
+    if (bp.l < min_bp)
+      break;
+
+    lr->tokens++;
+    expr.as_bin_expr.rhs = parse_expr(buf, lr, hs, delim, bp.r);
+    lhs = push_elem(&buf->exprs, sizeof(expr), &expr);
+  }
+
+  return lhs;
 }
 
 static void parse_stmt(ParseBuf *buf, LexRes *lr, HSet *hs)
@@ -126,13 +168,28 @@ static void parse_stmt(ParseBuf *buf, LexRes *lr, HSet *hs)
            "eof while parsing statement");
 
   Token *start = lr->tokens++;
+  Statement s = {};
+
   switch (start->tag & 0xff)
   {
   case TOK_KW_RETRN:
-    parse_expr(buf, lr, hs, ';');
+    s.kind = RETURN;
+    s.as_return = parse_expr(buf, lr, hs, ';', 0);
     break;
 
-    // TODO: case TOK_KW_LET:
+  case TOK_KW_LET:
+    s.kind = LET_BIND;
+    Token name = expect_token(lr, TOK_VAL_ID);
+    s.as_let_bind.name = insert_intern(hs, lr->intern, name.as_val_ident);
+
+    if (opt_munch_token(lr, ':'))
+    {
+      s.as_let_bind.type = buf->exprs.len;
+      parse_type(buf, lr, hs);
+    }
+    expect_token(lr, '=');
+    s.as_let_bind.expr = parse_expr(buf, lr, hs, ';', 0);
+    break;
 
   default:
     err(1,
@@ -140,6 +197,8 @@ static void parse_stmt(ParseBuf *buf, LexRes *lr, HSet *hs)
         " while parsing satement: 0x%x",
         (start->tag & 0xff));
   }
+
+  push_elem(&buf->stmts, sizeof(s), &s);
 
   expect_token(lr, ';');
 }
@@ -151,7 +210,8 @@ static uint32_t parse_block(ParseBuf *buf, LexRes *lr, HSet *hs)
   ptrdiff_t matching = intro.matching_scp >> 8;
   Token *end = lr->tokens + matching;
 
-  while (lr->tokens < end && !opt_munch_token(lr, '}'))
+  while (lr->tokens < end &&
+         !opt_munch_token(lr, '}')) // TODO: optional munch shouldn't be needed
   {
     parse_stmt(buf, lr, hs);
 
@@ -287,6 +347,5 @@ int main(int argc, char **argv)
 
   free_hset(parseres.strings);
 
-  
   return 0;
 }

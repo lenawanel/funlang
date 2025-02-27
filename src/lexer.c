@@ -151,7 +151,7 @@ static char unescape(char **s)
 static TokTag hash_kw(const char *s, uint32_t len)
 {
   // TODO: efficient perfect hash
-  if (len != 2 && len != 6 && len != 3)
+  if (len != 2 && len != 6 && len != 3 && len != 4)
     ; // we don't have a keyword
   else if (!strncmp(s, "return", len))
     return TOK_KW_RETRN;
@@ -161,6 +161,8 @@ static TokTag hash_kw(const char *s, uint32_t len)
     return TOK_KW_LET;
   else if (!strncmp(s, "fn", len))
     return TOK_KW_FN;
+  else if (!strncmp(s, "hole", len))
+    return TOK_KW_HOLE;
 
   return TOK_VAL_ID;
 }
@@ -212,7 +214,7 @@ typedef struct ScopeStacks
       uint64_t num = (uint64_t)strtoll(start, &l.cur, 0);
       uint32_t idx = push_lit(&res_buf, num);
       tok.pos = (uint32_t)(l.src - l.cur);
-      tok.as_lit_idx = idx;
+      tok.as_lit_idx = idx << 8;
       tok.tag |= TOK_LIT_INT;
     }
     else if (islower(char_at))
@@ -298,6 +300,7 @@ typedef struct ScopeStacks
       hash >>= 2;
 
       uint8_t cursor = --scopes.cursors[hash];
+      l.cur++;
 
       if (cursor >= MAX_SCOPE_DEPTH)
       {
@@ -315,7 +318,7 @@ typedef struct ScopeStacks
       ((Token *)res_buf.tokens.buffer)[opening_delim].matching_scp |=
           (int32_t)((res_buf.tokens.len - opening_delim) << 8);
 
-      tok.pos = (uint32_t)(l.src - l.cur++);
+      tok.pos = (uint32_t)(l.src - l.cur - 1);
       tok.tag = (uint32_t)char_at;
       tok.matching_scp |= (int32_t)((opening_delim - res_buf.tokens.len) << 8);
     }

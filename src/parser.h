@@ -1,4 +1,5 @@
 #include "common.h"
+#include "hashtable.h"
 
 typedef struct
 {
@@ -27,7 +28,7 @@ typedef struct
   enum
   {
     NAMED,
-    INBUILT, // TODO: does special casing make sense here?
+    INBUILT,
   } kind;
 
   union
@@ -56,6 +57,12 @@ typedef struct
   };
 } Statement;
 
+typedef struct {
+  uint32_t rhs;
+  uint32_t lhs;
+  char op;
+} BinExpr; 
+
 typedef struct
 {
   enum
@@ -63,12 +70,30 @@ typedef struct
     LIT_INT,
     BIND_USE,
     APPLICATION,
+    BINARY_EXPR,
   } kind;
 
   union
   {
     uint64_t as_lit_int;
     StrView as_bind_use;
+    BinExpr as_bin_expr;
   };
 } Expression;
 
+typedef struct
+{
+  FunctionDef *funcs;
+
+  ImplicitArg *iargs;
+  ExplicitArg *eargs;
+
+  ParsedType *types;
+
+  Statement *stmts;
+  Expression *exprs;
+
+  uint32_t funcs_len, iargs_len, eargs_len, types_len, stmts_len, exprs_len;
+
+  HSet strings;
+} ParseRes;

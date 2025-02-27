@@ -36,7 +36,7 @@ int main()
     if (!len)
       continue;
 
-    Lexer l = {.source = (char *)buf, .pos = 0, .end = len - 1};
+    Lexer l = {.src = (char *)buf, .cur = (char *)buf, .end = (char *)(buf + len - 1)};
 
     LexRes res = lex(l);
 
