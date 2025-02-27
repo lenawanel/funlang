@@ -1,3 +1,4 @@
 Grammar.bnf
 build
 afl-out
+.gdb_history

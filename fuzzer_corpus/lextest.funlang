@@ -1,7 +1,7 @@
 // comment
 
-fn aalksdjf(a: U32) -> AType {
-	let b: U32 = 12;
-	return a + b + 12313;
+fn aalksdjf(a: u32) -> AType {
+	let b: u32 = 12;
+	return a + -b + 12313;
 	/* another comment */
 }
