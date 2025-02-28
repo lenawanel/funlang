@@ -1,3 +1,6 @@
+#ifndef _LEXER_H
+#define _LEXER_H
+
 #include <stdint.h>
 
 typedef struct Lexer
@@ -42,6 +45,7 @@ typedef enum
                        // is indicatated by the corrresponding tag
                        // representation having its highest bit set
   TOK_KW_FN    = 0x81,
+  // TODO: reorder
   TOK_KW_ASS   = 0x82,
   TOK_KW_ASU   = 0x83,
   TOK_KW_LET   = 0x84,
@@ -57,10 +61,10 @@ typedef enum
   TOK_KW_U32   = 0xa2,
   TOK_KW_U64   = 0xa3,
 
-  TOK_KW_S8    = 0xa0,
-  TOK_KW_S16   = 0xa1,
-  TOK_KW_S32   = 0xa2,
-  TOK_KW_S64   = 0xa3,
+  TOK_KW_S8    = 0xa4,
+  TOK_KW_S16   = 0xa5,
+  TOK_KW_S32   = 0xa6,
+  TOK_KW_S64   = 0xa7,
 } TokTag;
 
 typedef struct Token
@@ -87,3 +91,5 @@ typedef struct
 
 void destroy_lexres(LexRes lex_res);
 [[nodiscard]] LexRes lex(Lexer l);
+
+#endif // _LEXER_H

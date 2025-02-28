@@ -1,7 +1,9 @@
 #include "lexer.h"
 #include "common.h"
 #include <ctype.h>
+#include <stdbit.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <xmmintrin.h>
 
@@ -190,94 +192,104 @@ static TokTag hash_kw(const char *s, uint32_t len)
 
 #include <immintrin.h>
 
-// TODO: maybe more efficient hash
+#pragma GCC diagnostic ignored "-Wmultichar"
+
+// TODO: hacky
+#define INT_CAST(x) ((int_cast){x}).n
+
+// TODO: maybe more efficient hash I bave it set up this way currently
+//       because it's extremely easy to extend
 static TokTag hash_kw(const char *s, uint32_t len)
 {
-  if (len > 6)
-    return TOK_VAL_ID;
-
   __mmask16 mask = (uint8_t)(1u << len) - 1u;
   // keyword candidate
-  __m128i kw_can = _mm_maskz_loadu_epi8(mask, s);
+  int64_t kw_can = _mm_maskz_loadu_epi8(mask, s)[0];
+
   switch (len)
   {
   case 2:
   { // may be fn, u8, s8
-    __m128i kws[3] = {
-        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'f', 'n'),
-        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'u', '8'),
-        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 's', '8'),
-    };
+    __m512i ca_vec = _mm512_set1_epi64(kw_can);
+    typedef union
+    {
+      char s[2];
+      int64_t n;
+    } int_cast;
 
-    // TODO: cheese these into a single comparison using bigger vectors
-    if (!_mm_cmpneq_epi8_mask(kws[0], kw_can))
-      return TOK_KW_FN;
-    if (!_mm_cmpneq_epi8_mask(kws[1], kw_can))
-      return TOK_KW_U8;
-    if (!_mm_cmpneq_epi8_mask(kws[2], kw_can))
-      return TOK_KW_S8;
+    __m512i kws = _mm512_setr_epi64(INT_CAST("fn"), INT_CAST("u8"),
+                                    INT_CAST("s8"), 0, 0, 0, 0, 0);
+
+    __mmask8 match = _mm512_cmpeq_epi64_mask(kws, ca_vec);
+
+    TokTag tok_kinds[] = {TOK_KW_FN, TOK_KW_U8, TOK_KW_S8};
+
+    if (match)
+      return tok_kinds[stdc_trailing_zeros_uc(match)];
+
     goto VAL_ID;
   }
   case 3:
   { // may be let, ass, asu, u16, s16, ...
-    __m128i kws[9] = {
-        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'a', 's', 'u'),
-        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'a', 's', 's'),
-        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'l', 'e', 't'),
+    __m512i ca_vec = _mm512_set1_epi32((int32_t)kw_can);
+    typedef union
+    {
+      char s[3];
+      int32_t n;
+    } int_cast;
 
-        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'u', '1', '6'),
-        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 's', '1', '6'),
+    __m512i kws = _mm512_setr_epi32(
+        INT_CAST("asu"), INT_CAST("ass"), INT_CAST("let"), INT_CAST("u16"),
+        INT_CAST("s16"), INT_CAST("u32"), INT_CAST("s32"), INT_CAST("u64"),
+        INT_CAST("s64"), 0, 0, 0, 0, 0, 0, 0);
 
-        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'u', '3', '2'),
-        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'u', '3', '2'),
+    __mmask16 match = _mm512_cmpeq_epi32_mask(kws, ca_vec);
 
-        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 's', '6', '4'),
-        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 's', '6', '4'),
-    };
+    TokTag tok_kinds[] = {TOK_KW_ASU, TOK_KW_ASS, TOK_KW_LET,
+                          TOK_KW_U16, TOK_KW_S16, TOK_KW_U32,
+                          TOK_KW_S32, TOK_KW_U64, TOK_KW_S64};
 
-    // TODO: cheese these into a single comparison using bigger vectors
-    if (!_mm_cmpneq_epi8_mask(kws[0], kw_can))
-      return TOK_KW_ASU;
-    if (!_mm_cmpneq_epi8_mask(kws[1], kw_can))
-      return TOK_KW_ASS;
-    if (!_mm_cmpneq_epi8_mask(kws[2], kw_can))
-      return TOK_KW_LET;
-
-    if (!_mm_cmpneq_epi8_mask(kws[3], kw_can))
-      return TOK_KW_U16;
-    if (!_mm_cmpneq_epi8_mask(kws[4], kw_can))
-      return TOK_KW_S16;
-
-    if (!_mm_cmpneq_epi8_mask(kws[5], kw_can))
-      return TOK_KW_U32;
-    if (!_mm_cmpneq_epi8_mask(kws[6], kw_can))
-      return TOK_KW_S32;
-
-    if (!_mm_cmpneq_epi8_mask(kws[7], kw_can))
-      return TOK_KW_U64;
-    if (!_mm_cmpneq_epi8_mask(kws[8], kw_can))
-      return TOK_KW_S64;
+    if (match)
+      return tok_kinds[stdc_trailing_zeros_uc(match)];
 
     goto VAL_ID;
   }
   case 4:
   {
-    __m128i kws[1] = {
-        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'h', 'o', 'l', 'e'),
-    };
+    __m512i ca_vec = _mm512_set1_epi64(kw_can);
+    typedef union
+    {
+      char s[4];
+      int64_t n;
+    } int_cast;
 
-    if (!_mm_cmpneq_epi8_mask(kws[0], kw_can))
-      return TOK_KW_HOLE;
+    __m512i kws = _mm512_setr_epi64(INT_CAST("hole"), 0, 0, 0, 0, 0, 0, 0);
+
+    __mmask8 match = _mm512_cmpeq_epi64_mask(kws, ca_vec);
+
+    TokTag tok_kinds[] = {TOK_KW_HOLE};
+
+    if (match)
+      return tok_kinds[stdc_trailing_zeros_uc(match)];
+
+    goto VAL_ID;
   }
   case 6:
   {
-    __m128i kws[1] = {
-        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'r', 'e', 't', 'u', 'r',
-                     'n'),
-    };
+    __m512i ca_vec = _mm512_set1_epi64(kw_can);
+    typedef union
+    {
+      char s[6];
+      int64_t n;
+    } int_cast;
 
-    if (!_mm_cmpneq_epi8_mask(kws[0], kw_can))
-      return TOK_KW_RETRN;
+    __m512i kws = _mm512_setr_epi64(INT_CAST("return"), 0, 0, 0, 0, 0, 0, 0);
+
+    __mmask8 match = _mm512_cmpeq_epi64_mask(kws, ca_vec);
+
+    TokTag tok_kinds[] = {TOK_KW_RETRN};
+
+    if (match)
+      return tok_kinds[stdc_trailing_zeros_uc(match)];
   }
 
   VAL_ID:

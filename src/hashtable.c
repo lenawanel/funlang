@@ -44,6 +44,7 @@ static void grow(HSet *restrict hs)
   assert((uintptr_t)nentrs != ~0ull && "failed to mmap HSet");
 
   SetEntry *ben = hs->entrs;
+  if (!ben) goto end; // gurad against some weird ub
   SetEntry *een = ben + hs->encap;
 
   uint32_t mask = new_cap - 1;
@@ -56,6 +57,7 @@ static void grow(HSet *restrict hs)
     insert_unique_in_cap(nentrs, ben->skey, mask);
   }
 
+  end:
   munmap(hs->entrs, hs->encap);
   hs->entrs = nentrs;
   hs->encap = new_cap;
