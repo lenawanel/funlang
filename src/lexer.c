@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <stdint.h>
 #include <string.h>
+#include <xmmintrin.h>
 
 #define MAX_INTERN_LEN 0xff
 
@@ -148,6 +149,7 @@ static char unescape(char **s)
   }
 }
 
+#if !defined(__x86_64__) && !defined(_M_X64)
 static TokTag hash_kw(const char *s, uint32_t len)
 {
   // TODO: efficient perfect hash
@@ -184,6 +186,107 @@ static TokTag hash_kw(const char *s, uint32_t len)
 
   return TOK_VAL_ID;
 }
+#else
+
+#include <immintrin.h>
+
+// TODO: maybe more efficient hash
+static TokTag hash_kw(const char *s, uint32_t len)
+{
+  if (len > 6)
+    return TOK_VAL_ID;
+
+  __mmask16 mask = (uint8_t)(1u << len) - 1u;
+  // keyword candidate
+  __m128i kw_can = _mm_maskz_loadu_epi8(mask, s);
+  switch (len)
+  {
+  case 2:
+  { // may be fn, u8, s8
+    __m128i kws[3] = {
+        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'f', 'n'),
+        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'u', '8'),
+        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 's', '8'),
+    };
+
+    // TODO: cheese these into a single comparison using bigger vectors
+    if (!_mm_cmpneq_epi8_mask(kws[0], kw_can))
+      return TOK_KW_FN;
+    if (!_mm_cmpneq_epi8_mask(kws[1], kw_can))
+      return TOK_KW_U8;
+    if (!_mm_cmpneq_epi8_mask(kws[2], kw_can))
+      return TOK_KW_S8;
+    goto VAL_ID;
+  }
+  case 3:
+  { // may be let, ass, asu, u16, s16, ...
+    __m128i kws[9] = {
+        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'a', 's', 'u'),
+        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'a', 's', 's'),
+        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'l', 'e', 't'),
+
+        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'u', '1', '6'),
+        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 's', '1', '6'),
+
+        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'u', '3', '2'),
+        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'u', '3', '2'),
+
+        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 's', '6', '4'),
+        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 's', '6', '4'),
+    };
+
+    // TODO: cheese these into a single comparison using bigger vectors
+    if (!_mm_cmpneq_epi8_mask(kws[0], kw_can))
+      return TOK_KW_ASU;
+    if (!_mm_cmpneq_epi8_mask(kws[1], kw_can))
+      return TOK_KW_ASS;
+    if (!_mm_cmpneq_epi8_mask(kws[2], kw_can))
+      return TOK_KW_LET;
+
+    if (!_mm_cmpneq_epi8_mask(kws[3], kw_can))
+      return TOK_KW_U16;
+    if (!_mm_cmpneq_epi8_mask(kws[4], kw_can))
+      return TOK_KW_S16;
+
+    if (!_mm_cmpneq_epi8_mask(kws[5], kw_can))
+      return TOK_KW_U32;
+    if (!_mm_cmpneq_epi8_mask(kws[6], kw_can))
+      return TOK_KW_S32;
+
+    if (!_mm_cmpneq_epi8_mask(kws[7], kw_can))
+      return TOK_KW_U64;
+    if (!_mm_cmpneq_epi8_mask(kws[8], kw_can))
+      return TOK_KW_S64;
+
+    goto VAL_ID;
+  }
+  case 4:
+  {
+    __m128i kws[1] = {
+        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'h', 'o', 'l', 'e'),
+    };
+
+    if (!_mm_cmpneq_epi8_mask(kws[0], kw_can))
+      return TOK_KW_HOLE;
+  }
+  case 6:
+  {
+    __m128i kws[1] = {
+        _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'r', 'e', 't', 'u', 'r',
+                     'n'),
+    };
+
+    if (!_mm_cmpneq_epi8_mask(kws[0], kw_can))
+      return TOK_KW_RETRN;
+  }
+
+  VAL_ID:
+  default:
+    return TOK_VAL_ID;
+  }
+}
+
+#endif // x64
 
 #define MAX_SCOPE_DEPTH 10
 
