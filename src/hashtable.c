@@ -114,9 +114,9 @@ bool remove_str(HSet *restrict hs, StrView str)
 StrView insert(HSet *restrict hs, char *to_insert, uint32_t len)
 {
   bool new  = insert_str(hs, (StrView){.len = len, .txt = to_insert});
-  char *txt = hs->intrn.buffer;
+  char *txt = NULL;
 
-  if (new) co_append(&hs->intrn, to_insert, len);
+  if (new) txt = co_append(&hs->intrn, to_insert, len);
 
   return (StrView){.txt = txt, .len = len};
 }

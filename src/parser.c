@@ -70,15 +70,16 @@ typedef enum
   TERM_BUILTIN_TY  = TERM | TYPE,           // u32, s32, ...
   TERM_TY_NAME_USE = TERM | TYPE + 1,       // Atype, ...
 
-  TERM_IMP_ARGL_INT = TERM | INTRO | IMPLICIT_ARG_LIST,     // [
-  TERM_IMP_ARG_INT  = TERM | INTRO | IMPLICIT_ARG_LIST + 1, // Tname
+  TERM_IMP_ARGL_INT = TERM | INTRO | IMPLICIT_ARG_LIST, // [
+  TERM_IMP_ARG_INT =
+      TERM | CONTENT_STR | INTRO | IMPLICIT_ARG_LIST + 1,   // Tname
   TERM_IMP_ARG_SEP  = TERM | INTRO | IMPLICIT_ARG_LIST + 2, // ,
   TERM_IMP_ARGL_END = TERM | CLOSE | IMPLICIT_ARG_LIST,     // ]
 
-  TERM_EXP_ARGL_INT = TERM | INTRO | EXPLICIT_ARG_LIST,     // (
-  TERM_EXP_ARG_INT  = TERM | INTRO | EXPLICIT_ARG_LIST + 1, // name
-  TERM_EXP_ARG_SEP  = TERM | INTRO | EXPLICIT_ARG_LIST + 2, // ,
-  TERM_EXP_ARGL_END = TERM | CLOSE | EXPLICIT_ARG_LIST,     // )
+  TERM_EXP_ARGL_INT = TERM | INTRO | EXPLICIT_ARG_LIST,                  // (
+  TERM_EXP_ARG_INT = TERM | CONTENT_STR | INTRO | EXPLICIT_ARG_LIST + 1, // name
+  TERM_EXP_ARG_SEP = TERM | INTRO | EXPLICIT_ARG_LIST + 2,               // ,
+  TERM_EXP_ARGL_END = TERM | CLOSE | EXPLICIT_ARG_LIST,                  // )
 } PStateKind;
 
 typedef struct
@@ -141,44 +142,51 @@ static bool term_matches(PStateKind term, TokTag tag)
   }
 }
 
-// TODO: this doesn't work, as the emmited node needs to depend on the
-//       matched rule too.
-static PNodeKind tag_to_node_kind(TokTag tag)
-{
-  switch (tag)
-  {
-  case TOK_LIT_INT:  return LITERAL_INT;
-  case TOK_VAL_ID:   return BIND_USE;
-  case TOK_PAREN_O:  return EXP_ARGLIST_BEG;
-  case TOK_PAREN_C:  return EXP_ARGLIST_END;
-  case TOK_PLUS:     return INFIX_PLUS;
-  case TOK_HYPHON:   return PREFIX_MINUS;
-  case TOK_COLON:    return BIND_TY_JUDGE;
-  case TOK_SEMI:     return STMT_SEMI;
-  case TOK_BRACK_O:
-  case TOK_BRACK_C:
-  case TOK_BRACE_O:
-  case TOK_BRACE_C:
-  case TOK_KW_FN:    return FUN_INT;
-  case TOK_KW_ARROW: return FUN_ARROW;
-  case TOK_KW_LET:   return STMT_LET_BIND;
-  case TOK_KW_U8:
-  case TOK_KW_S8:
-  case TOK_KW_U16:
-  case TOK_KW_U32:
-  case TOK_KW_U64:
-  case TOK_KW_S16:
-  case TOK_KW_S32:
-  case TOK_KW_S64:   return BUILTIN_TY;
-  case TOK_KW_HOLE:  return INVALID;
-  case TOK_KW_RETRN: return STMT_RETURN;
-  default:           return INVALID;
-  }
-}
-
 static StrView intern_lex_intern(HSet *names, char *intern, Intern i)
 {
   return insert(names, intern + i.idx, i.len >> 8);
+}
+
+static void term_into_node(Token word, PStateKind state, PNode *n, LexRes *lr,
+                           PBuf *tree)
+{
+
+  if (state & CONTENT_STR)
+    n->str = intern_lex_intern(&tree->names, lr->intern, word.as_intern);
+  else if (state & CONTENT_LIT)
+    n->literal_int = lr->lits[n->literal_int];
+
+  switch (state & STATIC_MASK)
+  {
+  case TERM_BL_OPN_INT:   n->kind = FUN_BLOCK; break;
+  case TERM_LET_BIND:     n->kind = STMT_LET_BIND; break;
+  case TERM_ASSGN:        n->kind = STMT_ASSGN_EQ; break;
+  case TERM_RETURN:       n->kind = STMT_RETURN; break;
+  case TERM_FN_INT:       n->kind = FUN_INT; break;
+  case TERM_FN_END:       n->kind = FUN_END; break;
+  case TERM_BIND_NAME:    n->kind = BIND_NAME; break;
+  case TERM_BIND_USE:     n->kind = BIND_USE; break;
+  case TERM_LITERAL_INT:  n->kind = LITERAL_INT; break;
+  case TERM_PREFIX_MINUS: n->kind = PREFIX_MINUS; break;
+  case TERM_SEMI:         n->kind = STMT_SEMI; break;
+  case TERM_ADD_CONT:     n->kind = INFIX_PLUS; break;
+  case TERM_TY_FN_ARROW:  n->kind = FUN_ARROW; break;
+  case TERM_TY_SUBTY:     n->kind = BIND_TY_SUBTY; break;
+  case TERM_TY_JUDGE:     n->kind = BIND_TY_JUDGE; break;
+  case TERM_BUILTIN_TY:   n->kind = BUILTIN_TY; break; // TODO: kind
+  case TERM_TY_NAME_USE:  n->kind = BIND_TY_USE; break;
+  case TERM_EXP_ARGL_END: n->kind = EXP_ARGLIST_END; break;
+  case TERM_EXP_ARGL_INT: n->kind = EXP_ARGLIST_BEG; break;
+  case TERM_EXP_ARG_INT:  n->kind = BIND_NAME; break;
+  case TERM_EXP_ARG_SEP:  n->kind = EXP_ARGLIST_SEP; break;
+  case TERM_IMP_ARGL_END:
+  case TERM_IMP_ARGL_INT:
+  case TERM_IMP_ARG_INT:
+  case TERM_IMP_ARG_SEP:
+  default:
+    printf("state = 0x%x\n", state);
+    assert(false && "unmatched term writing to node");
+  }
 }
 
 [[nodiscard]] ParseRes parse(LexRes lr)
@@ -207,9 +215,10 @@ static StrView intern_lex_intern(HSet *names, char *intern, Intern i)
 
       if (focus.kind & CHOICE) stack.len -= focus.chsz;
 
+      term_into_node(word, focus.kind, &n, &lr, &tree);
+
       if (focus.kind & INTRO)
       {
-        n.kind = tag_to_node_kind(word.tag);
         switch (focus.kind & STATIC_MASK)
         {
         case TERM_FN_INT: focus.kind = FUNC; break;
@@ -218,6 +227,7 @@ static StrView intern_lex_intern(HSet *names, char *intern, Intern i)
           focus.kind = TERM_EXP_ARGL_END;
           focus.tpos = tree.buf.len;
           co_push(&stack, focus);
+
           focus.kind = TERM_EXP_ARG_INT | CHOICE;
           focus.chsz = 0;
           break;
@@ -259,11 +269,14 @@ static StrView intern_lex_intern(HSet *names, char *intern, Intern i)
           // TODO: maybe move semi stuff here
           focus.kind = EXPRESSION;
           co_push(&stack, focus);
+
           focus.kind = TERM_ASSGN;
           co_push(&stack, focus);
+
           focus.kind = TERM_TY_JUDGE | CHOICE;
           focus.tpos = tree.buf.len;
           co_push(&stack, focus);
+
           focus.kind = TERM_BIND_NAME;
           break;
         case TERM_ADD_CONT:
@@ -271,6 +284,7 @@ static StrView intern_lex_intern(HSet *names, char *intern, Intern i)
           focus.dclo.nod_pos = tree.buf.len;
           focus.dclo.tok_pos = word.pos;
           co_push(&stack, focus);
+
           focus.kind = EXPRESSION;
           // TODO: hacky
           goto delay_closing;
@@ -279,6 +293,7 @@ static StrView intern_lex_intern(HSet *names, char *intern, Intern i)
           focus.dclo.nod_pos = tree.buf.len;
           focus.dclo.tok_pos = word.pos;
           co_push(&stack, focus);
+
           focus.kind = EXPRESSION;
           // TODO: hacky
           goto delay_closing;
@@ -286,7 +301,6 @@ static StrView intern_lex_intern(HSet *names, char *intern, Intern i)
         case TERM_SEMI:
 
           n.subtree_sz = tree.buf.len - focus.tpos;
-          n.kind       = tag_to_node_kind(word.tag);
 
           focus.kind = STATEMENT;
           break;
@@ -296,16 +310,10 @@ static StrView intern_lex_intern(HSet *names, char *intern, Intern i)
       else if (focus.kind & CLOSE)
       {
         n.subtree_sz = tree.buf.len - focus.tpos;
-        n.kind       = tag_to_node_kind(word.tag);
         // TODO: empty stack
         if (stack.len) co_pop(&stack, &focus);
       }
       else if (stack.len) { co_pop(&stack, &focus); }
-
-      if (focus.kind & CONTENT_STR)
-        n.str = intern_lex_intern(&tree.names, lr.intern, word.as_intern);
-      else if (focus.kind & CONTENT_LIT)
-        n.literal_int = lr.lits[n.literal_int];
 
       co_push(&tree.buf, n);
 
@@ -325,13 +333,14 @@ static StrView intern_lex_intern(HSet *names, char *intern, Intern i)
       default:             assert(false && "unhandled close fixup");
       }
       n.pos        = focus.dclo.tok_pos;
-      n.subtree_sz = focus.dclo.nod_pos - tree.buf.len;
+      n.subtree_sz = tree.buf.len - focus.dclo.nod_pos;
       co_push(&tree.buf, n);
       co_pop(&stack, &focus);
     }
     else if (!(focus.kind & TERM))
     {
-      /* nonterminal rules.
+      /*
+       * nonterminal rules.
        *
        *  in this parser they basically play the role of convenience functions
        *  where with mutually recursive functions you would call smaller
@@ -437,6 +446,10 @@ void print_pnode(PNode n)
   case STMT_LET_BIND:   printf("{ .kind = STMT_LET_BIND }"); break;
   case BUILTIN_TY:      printf("{ .kind = BUILTIN_TY, kind = ** }"); break;
   case EXP_ARGLIST_BEG: printf("{ .kind = EXP_ARGLIST_BEG }"); break;
+  case FUN_BLOCK:       printf("{ .kind = FUNBLOCK }"); break;
+  case EXP_ARGLIST_SEP: printf("{ .kind = EXP_ARGLIST_SET }"); break;
+  case BIND_TY_USE:     printf("{ .kind = BIND_TY_USE }"); break;
+  case STMT_ASSGN_EQ:   printf("{ .kind = STMT_ASSGN_EQ }"); break;
   case EXP_ARGLIST_END:
     printf("{ .kind = EXP_ARGLIST_BEG, subtree_sz = %d }", n.subtree_sz);
     break;

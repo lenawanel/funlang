@@ -8,16 +8,19 @@ typedef enum
   INVALID,
 
   FUN_INT,   // fn
-  FUN_END,   // }
   FUN_ARROW, // ->
+  FUN_BLOCK, // {
+  FUN_END,   // }
 
   EXP_ARGLIST_BEG, // (
   EXP_ARGLIST_END, // )
+  EXP_ARGLIST_SEP, // ,
 
   BIND_NAME,
   BIND_TY_JUDGE, // :
   BIND_TY_SUBTY, // <:
   BIND_USE,
+  BIND_TY_USE,
 
   LITERAL_INT,
 
@@ -28,9 +31,10 @@ typedef enum
   INFIX_MINUS, // -
   INFIX_PLUS,  // +
 
-  STMT_RETURN,
-  STMT_LET_BIND,
-  STMT_SEMI,
+  STMT_RETURN,   // return
+  STMT_LET_BIND, // let
+  STMT_ASSGN_EQ, // =
+  STMT_SEMI,     // ;
   BUILTIN_TY,
 } PNodeKind;
 

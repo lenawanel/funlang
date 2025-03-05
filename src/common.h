@@ -38,7 +38,7 @@ void insert_elem(DynamicArray *restrict array, size_t elem_bytes,
                  const void *elem, uint32_t idx);
 
 #define co_append(a, b, l) append_buf(a, sizeof(*(b)), b, l)
-void append_buf(DynamicArray *restrict array, size_t elem_bytes,
+char* append_buf(DynamicArray *restrict array, size_t elem_bytes,
                 const void *buf, size_t len);
 
 #endif // __FUNLANG_COMMON_H_
@@ -72,8 +72,6 @@ uint32_t push_elem(DynamicArray *restrict array, size_t elem_bytes,
 {
   if (++array->len >= array->cap) grow_array(array, elem_bytes);
 
-  printf("(%p)push: array->len = %x\n", array, array->len);
-
   memcpy(array->buffer + elem_bytes * (array->len - 1), elem, elem_bytes);
 
   return array->len - 1;
@@ -84,7 +82,6 @@ void pop_elem(DynamicArray *restrict array, size_t elem_bytes, void *elem)
   assert(array->len);
 
   memcpy(elem, array->buffer + elem_bytes * --array->len, elem_bytes);
-  printf("(%p)pop:  array->len = %x\n", array, array->len);
 }
 
 void insert_elem(DynamicArray *restrict array, size_t elem_bytes,
@@ -102,7 +99,7 @@ void insert_elem(DynamicArray *restrict array, size_t elem_bytes,
   memcpy(insert_start, elem, elem_bytes);
 }
 
-void append_buf(DynamicArray *array, size_t elem_bytes, const void *buf,
+char* append_buf(DynamicArray *array, size_t elem_bytes, const void *buf,
                 size_t len)
 {
   size_t start_idx = array->len * elem_bytes;
@@ -110,6 +107,8 @@ void append_buf(DynamicArray *array, size_t elem_bytes, const void *buf,
   if (array->len >= array->cap) grow_array(array, elem_bytes);
 
   memcpy(array->buffer + start_idx, buf, len * elem_bytes);
+
+  return array->buffer + start_idx;
 }
 #undef __FUNLANG_COMMON_H_IMPL
 #endif // __FUNLANG_COMMON_H_IMPL
