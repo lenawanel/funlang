@@ -1,4 +1,12 @@
 BasedOnStyle: LLVM
 BreakBeforeBraces: Allman
 ColumnLimit: 80
-
+AlignConsecutiveAssignments: true
+AllowShortBlocksOnASingleLine: true
+AllowShortIfStatementsOnASingleLine: true
+AllowShortCaseLabelsOnASingleLine: true
+AlignConsecutiveShortCaseStatements:
+  Enabled: true
+  AcrossEmptyLines: true
+  AcrossComments: true
+  AlignCaseColons: false

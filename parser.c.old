@@ -1,261 +1,371 @@
-#include "lexer.h"
-#include <string.h>
-#define __FUNLANG_COMMON_H_IMPL
+#include "parser.h"
 #include "common.h"
-#include <assert.h>
 #include <err.h>
 #include <stddef.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-
-typedef enum ParseNodeKind
-{
-  ERROR_NODE,
-
-  FN_BIND,
-  TYPE_BIND,
-  BINDING_NAME,
-  BINDING_USE,
-  LITERAL,
-} ParseNodeKind;
-
-typedef struct __attribute__((aligned(8))) ParseNode
-{
-#pragma pack(push, 4)
-  union
-  {
-    struct
-    {
-      char *text;
-      uint32_t size;
-    } str_view;
-    uint64_t lit;
-  };
-#pragma pack(pop)
-  ParseNodeKind kind;
-  uint32_t pos;
-  uint32_t _reserved;
-} ParseNode;
-
-typedef struct ParseBuffer
-{
-  char *intern;
-
-  DynamicArray tree_buf;
-} ParseBuffer;
-
-static void push_node(ParseBuffer *restrict buf, ParseNode parse_node)
-{
-  push_elem(&buf->tree_buf, sizeof(ParseNode), &parse_node);
-}
-
-static void insert_node(ParseBuffer *restrict buf, ParseNode parse_node,
-                        uint32_t idx)
-{
-  insert_elem(&buf->tree_buf, sizeof(ParseNode), &parse_node, idx);
-}
-
-typedef struct ParseRes
-{
-  char *intern;
-
-  ParseNode *tree_buf;
-  uint32_t tree_len;
-} ParseRes;
-
-void destroy_ast(ParseRes a)
-{
-  free(a.tree_buf);
-  free(a.intern);
-}
-
-// TODO: consistently name the variants
-typedef enum
-{
-  // if this flag is set, we may just not encounter any expected value
-  NOTHING = (0x1 << 0x1f),
-  MANY = (0x1 << 0x1e),
-  // length is stored in data field
-  SEQUENCE_START = 0x1 << 0x1d,
-  // length is stored in data field
-  SEQUENCE_END = 0x1 << 0x1c,
-  // a function may be defined if this flag is set
-  RULE_FUNCTION = 0x1 << 0x1b, // TODO: is this useful?
-                               // we are expecting a value ident if flag is set
-                               // misc flag used by rules
-  MISC = 1 << 0x1a,
-
-  // a list of argumets of the for (name1: type, ..)
-  ARGBINDLIST_INTR = 0x1,
-  ARGBINDLIST_BODY = 0x2,
-  // a list of implicit arguments of the form [Type0, Type1 <: Type2, ..]
-  IMPLICIT_ARGS_BEGIN = 0x4,
-  // a block of statements optionally ending with an expression
-  RULE_BLOCK = 0x5,
-  // an arrow "->", like in the
-  RULE_ARROW = 0x6,
-  RULE_COLON = 0x7,
-  // a Type currently only supports type names
-  // TODO: make the types of all values (e.g functions) nameable
-  RULE_TYPE = 0x8,
-  RULE_VAL_ID = 0x9,
-} ParserStateKind;
-
-static ParserStateKind extract_rule(ParserStateKind st) { return st & 0xffff; }
-
-static bool flags_present(ParserStateKind st, ParserStateKind flags)
-{
-  return (st & flags) == flags;
-}
 
 typedef struct
 {
-  ParserStateKind kind;
-  uint32_t data;
-} ParserState;
+  DynamicArray funcs;
 
-typedef struct
-{
-  DynamicArray stack;
-} ParseCtx;
+  DynamicArray iargs;
+  DynamicArray eargs;
 
-static void push_state(register ParseCtx *restrict ctx,
-                       ParserState parser_state)
+  DynamicArray types;
+
+  DynamicArray stmts;
+  DynamicArray exprs;
+} ParseBuf;
+
+static StrView insert_intern(HSet *hs, char *intrn, Intern i)
 {
-  push_elem(&ctx->stack, sizeof(ParserState), &parser_state);
+  return insert(hs, i.idx + intrn, i.len >> 8);
 }
 
-static ParserState pop_state(register ParseCtx *restrict ctx)
+Token expect_token(LexRes *lr, TokTag tag)
 {
-  ParserState p;
-  pop_elem(&ctx->stack, sizeof(ParserState), &p);
-  return p;
+  Token tok = *lr->tokens++;
+
+  // TODO: proper error handling
+  assert((tok.tag & 0xff) == tag);
+  return tok;
 }
 
-ParseRes parse(LexRes lexres)
+bool opt_munch_token(LexRes *lr, TokTag tag)
 {
-  ParseBuffer buf = {};
-  buf.intern = lexres.intern;
-  ParseCtx ctx = {};
+  Token tok = *lr->tokens;
+  bool matched = (tok.tag & 0xff) == tag;
 
-  ParserState state = {.data = 0, .kind = RULE_FUNCTION | MANY};
+  if (matched)
+    lr->tokens++;
 
-  push_state(&ctx, state);
+  return matched;
+}
 
-  Token *end = lexres.tokens + lexres.tok_num;
+bool is_at(LexRes *lr, TokTag tag)
+{
+  Token tok = *lr->tokens;
+  return (tok.tag & 0xff) == tag;
+}
 
-  while ((state = pop_state(&ctx)).kind)
+static void parse_type(ParseBuf *buf, LexRes *lr, HSet *hs)
+{
+  // TODO: more complex types
+  Token tok = *lr->tokens++;
+
+  ParsedType type = {};
+  switch (tok.tag & 0xff)
   {
-    ParserState state_to_push = {};
-    ParserStateKind kind = extract_rule(state.kind);
+  case TOK_TYPE_ID:
+    type.kind = PARSED_TY_NAMED;
+    type.as_named = insert_intern(hs, lr->intern, tok.as_typ_ident);
+    break;
 
-    bool matched;
+  default:
+    type.kind = PARSED_TY_INBUILT;
+    type.as_inbuilt = tok.tag & 0xff;
+  }
 
-    ParseNode pn;
+  co_push(&buf->types, type);
+}
 
-    switch (kind)
+static uint32_t parse_implicit_args(ParseBuf *, LexRes *, HSet *)
+{
+  err(1, "TODO: "
+         "parse implicit arguments");
+}
+
+static uint32_t parse_explicit_args(ParseBuf *buf, LexRes *lr, HSet *hs)
+{
+  uint32_t len = 0;
+  Token intro = expect_token(lr, '(');
+  ptrdiff_t matching = intro.matching_scp >> 8;
+  Token *end = lr->tokens + matching;
+
+  while (lr->tokens < end &&
+         !opt_munch_token(lr, ')')) // TODO: fix lexer matching scope
+  {
+    ExplicitArg earg = {};
+
+    Token name = expect_token(lr, TOK_VAL_ID);
+    earg.name = insert_intern(hs, lr->intern, name.as_val_ident);
+
+    expect_token(lr, ':');
+
+    earg.type = buf->types.len;
+    parse_type(buf, lr, hs);
+
+    opt_munch_token(lr, ',');
+
+    co_push(&buf->eargs, earg);
+    len++;
+  }
+
+  return len;
+}
+
+struct
+{
+  uint8_t l, r;
+} infix_binding_power(uint8_t op)
+{
+  uint8_t l[255] = {
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 1, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+  uint8_t r[255] = {
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 2, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+  uint8_t op_idx = (uint8_t)op;
+
+  return (typeof(infix_binding_power(0))){.l = l[op_idx], .r = r[op_idx]};
+}
+
+uint8_t prefix_binding_power(uint8_t op)
+{
+  uint8_t p[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5};
+
+  return p[(uint8_t)op];
+}
+
+static uint32_t parse_appl_arglist(ParseBuf *buf, LexRes *lr, HSet *hs)
+{
+}
+
+[[nodiscard]] static uint32_t parse_expr(ParseBuf *buf, LexRes *lr, HSet *hs,
+                                         TokTag delim, uint8_t min_bp)
+{
+  uint32_t lhs;
+  // TODO: other kinds of expressions
+  Expression expr = {};
+  Token first_tok = *lr->tokens++;
+  switch (first_tok.tag & 0xff)
+  {
+  case TOK_LIT_INT:
+    expr.kind = LIT_INT;
+    expr.as_lit_int = lr->lits[first_tok.as_lit_idx >> 8];
+
+    lhs = co_push(&buf->exprs, expr);
+    break;
+
+  case TOK_VAL_ID:
+    expr.kind = BIND_USE;
+    expr.as_bind_use = insert_intern(hs, lr->intern, first_tok.as_val_ident);
+
+    lhs = co_push(&buf->exprs, expr);
+    break;
+
+  case TOK_PAREN_O:
+    lhs = parse_expr(buf, lr, hs, delim, 0);
+    expect_token(lr, ')');
+    break;
+
+  default: // TODO: actually validat that this is a valid prefix op
+    uint8_t op = first_tok.tag & 0xff;
+    expr.kind = UNARY_EXPR;
+    expr.as_una_expr.op = op;
+    uint8_t r_bp = prefix_binding_power(op);
+
+    assert(r_bp && "encountered unexpected token"
+                   " while parsing an expression");
+
+    expr.as_una_expr.operand = parse_expr(buf, lr, hs, delim, r_bp);
+
+    lhs = co_push(&buf->exprs, expr);
+  }
+
+  while (lr->tokens < lr->tkeptr)
+  {
+    uint8_t op = lr->tokens->tag & 0xff;
+    if (op == delim)
+      break;
+
+    if (op == '(')
     {
-    case RULE_FUNCTION:
-      matched = lexres.tokens->tag == KW_FN;
-      if (!matched) break;
-
-      pn.pos  = lexres.tokens->pos;
-      pn.kind = FN_BIND;
-      push_node(&buf, pn);
-
-      state_to_push.kind = ARGBINDLIST_INTR;
-      state_to_push.kind = RULE_VAL_ID;
-      push_state(&ctx, state_to_push);
-
-      break;
-    case RULE_VAL_ID:
-      matched = lexres.tokens->tag == VAL_ID;
-      if (!matched) break;
-
-      Intern i = lexres.tokens->as_val_ident;
-      pn.str_view.text = buf.intern + i.idx;
-      pn.str_view.size = i.len >> 8;
-      pn.pos           = lexres.tokens->pos;
-      pn.kind          = BINDING_NAME;
-      push_node(&buf, pn);
-
-      break;
-    case ARGBINDLIST_INTR:
-      matched = lexres.tokens->tag == PAREN_O;
-      if (!matched) break;
-
-      while (++lexres.tokens <= end)
-      {
-        
-      }
-      break;
-    default:
-      err(1, "unhandled parser state");
+      lhs = parse_appl_arglist(buf, lr, hs);
+      continue;
     }
 
-    // TODO: adopt the commented out code below
-    (void)matched;
+    expr.kind = BINARY_EXPR;
+    expr.as_bin_expr.op = op;
+    expr.as_bin_expr.lhs = lhs;
 
-    // FIX: less hacky
-    if (++lexres.tokens > end)
+    typeof(infix_binding_power(op)) bp = infix_binding_power(op);
+    if (bp.l < min_bp)
       break;
+
+    lr->tokens++;
+    expr.as_bin_expr.rhs = parse_expr(buf, lr, hs, delim, bp.r);
+    lhs = co_push(&buf->exprs, expr);
   }
 
-  // for (uint32_t tok_idx = 0; tok_idx < lexres.tok_num;) {
-  // if (!matched && current.kind & NOTHING)
-  // { // if an optional rule didn't match, continue trying the next
-  // one
-  // if (flags_present(current.kind, SEQUENCE_START))
-  // state.stack.len -=
-  //  current.data - 1; // we didn't match the start of a sequence
-  // so we skip every other part too
-  // continue;
-  // }
-  // if (!matched)
-  //   abort(); // TODO: error handling
-
-  // if (flags_present(current.kind, SEQUENCE_END | MANY))
-  //   state.stack.len += current.data; // we matched a full reccuring sequence
-  // else if (flags_present(current.kind, MANY))
-  //   state.stack.len++; // we matched a rule that may infinitely repeat
-  //                      // so we repush this exact rule
-  //                      // in practice it's unlikely that I'll use this
-
-  ParseRes res = {.tree_buf = buf.tree_buf.buffer,
-                  .tree_len = buf.tree_buf.len,
-                  .intern = buf.intern};
-
-  return res;
+  return lhs;
 }
 
-int main(int argc, char **argv)
+static void parse_stmt(ParseBuf *buf, LexRes *lr, HSet *hs)
 {
-  if (argc < 2)
+  if (lr->tokens + 1 > lr->tkeptr)
+    err(1, "encountered unexpected "
+           "eof while parsing statement");
+
+  Token *start = lr->tokens++;
+  Statement s = {};
+
+  switch (start->tag & 0xff)
   {
-    printf("provide a file to lex\n");
-    exit(1);
+  case TOK_KW_RETRN:
+    s.kind = RETURN;
+    s.as_return = parse_expr(buf, lr, hs, ';', 0);
+    break;
+
+  case TOK_KW_LET:
+    s.kind = LET_BIND;
+    Token name = expect_token(lr, TOK_VAL_ID);
+    s.as_let_bind.name = insert_intern(hs, lr->intern, name.as_val_ident);
+
+    if (opt_munch_token(lr, ':'))
+    {
+      s.as_let_bind.type = buf->exprs.len;
+      parse_type(buf, lr, hs);
+    }
+    expect_token(lr, '=');
+    s.as_let_bind.expr = parse_expr(buf, lr, hs, ';', 0);
+    break;
+
+  default:
+    err(1,
+        "encountered unexpected token"
+        " while parsing satement: 0x%x",
+        (start->tag & 0xff));
   }
-  FILE *f = fopen(argv[1], "rb");
-  (void)fseek(f, 0, SEEK_END);
-  size_t fsize = (size_t)ftell(f);
-  (void)fseek(f, 0, SEEK_SET); // same as rewind(f);
 
-  char *string = malloc(fsize + 1);
-  (void)fread(string, fsize, 1, f);
-  (void)fclose(f);
+  co_push(&buf->stmts, s);
 
-  string[fsize] = 0;
-  Lexer l = {.source = string, .pos = 0, .end = (uint32_t)fsize - 1};
+  expect_token(lr, ';');
+}
 
+static uint32_t parse_block(ParseBuf *buf, LexRes *lr, HSet *hs)
+{
+  uint32_t len = 0;
+  Token intro = expect_token(lr, '{');
+  ptrdiff_t matching = intro.matching_scp >> 8;
+  Token *end = lr->tokens + matching;
+
+  while (lr->tokens < end &&
+         !opt_munch_token(lr, '}')) // TODO: optional munch shouldn't be needed
   {
-    LexRes lexres = lex(l);
-    free(string);
+    parse_stmt(buf, lr, hs);
 
-    printf("lexed %d tokens\n", lexres.tok_num);
-
-    destroy_lexres(lexres);
+    len++;
   }
 
-  return 0;
+  return len;
+}
+
+static void parse_fn(ParseBuf *buf, LexRes *lr, HSet *hs)
+{
+  FunctionDef fn = {};
+
+  Token name_tok = expect_token(lr, TOK_VAL_ID);
+  fn.name = insert_intern(hs, lr->intern, name_tok.as_val_ident);
+
+  if (lr->tokens + 1 > lr->tkeptr)
+    err(1, "encountered unexpected eof while parsing function");
+
+  Token first_arglist_start = *lr->tokens;
+  if ((first_arglist_start.tag & 0xff) == '[')
+  {
+    fn.ea_beg = buf->eargs.len;
+    fn.ea_len = parse_implicit_args(buf, lr, hs);
+  }
+
+  fn.ia_beg = buf->iargs.len;
+  fn.ia_len = parse_explicit_args(buf, lr, hs);
+
+  if (lr->tokens + 1 > lr->tkeptr)
+    err(1, "encountered unexpected eof while parsing function");
+
+  Token arr_or_bl = *(lr->tokens++);
+
+  if ((arr_or_bl.tag & 0xff) == TOK_KW_ARROW)
+  {
+    fn.type = buf->types.len;
+    parse_type(buf, lr, hs);
+  }
+
+  fn.bl_beg = buf->stmts.len;
+  fn.bl_len = parse_block(buf, lr, hs);
+
+  co_push(&buf->funcs, fn);
+}
+
+[[nodiscard("has to be freed")]] ParseRes parse(LexRes lr)
+{
+  ParseBuf buf = {};
+  // TODO: hacky
+  co_push(&buf.funcs, (FunctionDef){});
+  co_push(&buf.iargs, (ImplicitArg){});
+  co_push(&buf.eargs, (ExplicitArg){});
+  co_push(&buf.types, (ParsedType){});
+  co_push(&buf.stmts, (Statement){});
+  co_push(&buf.exprs, (Expression){});
+
+  HSet hs = {};
+
+  while (lr.tokens < lr.tkeptr)
+  {
+    switch ((lr.tokens++)->tag & 0xff)
+    {
+    case TOK_KW_FN:
+      parse_fn(&buf, &lr, &hs);
+      break;
+
+    default:
+      err(1, "unhandled token in top position: 0x%x", lr.tokens->tag & 0xff);
+    }
+  }
+
+  ParseRes res = {
+      .funcs = buf.funcs.buffer,
+      .funcs_len = buf.funcs.len,
+
+      .iargs = buf.iargs.buffer,
+      .iargs_len = buf.eargs.len,
+
+      .eargs = buf.eargs.buffer,
+      .eargs_len = buf.eargs.len,
+
+      .types = buf.types.buffer,
+      .types_len = buf.types.len,
+
+      .stmts = buf.stmts.buffer,
+      .stmts_len = buf.stmts.len,
+
+      .exprs = buf.exprs.buffer,
+      .exprs_len = buf.exprs.len,
+
+      .strings = hs,
+  };
+
+  return res;
 }
