@@ -1,384 +1,477 @@
-#define __FUNLANG_COMMON_H_IMPL
+/*
+ * A parser for a fun language.
+ *  The current approach is inspired by Carbon and pretty closely
+ *  resembles A simple LL(N) parser.
+ *
+ *  currently it's very much unrefined and has lots of unnecassary clutter.
+ */
+
 #include "parser.h"
-#include "common.h"
-#include <err.h>
-#include <stddef.h>
+#include "hashtable.h"
+#include "lexer.h"
 #include <stdio.h>
+#include <string.h>
 
 typedef struct
 {
-  DynamicArray funcs;
+  DynamicArray buf;
+  DynamicArray cls;
+  HSet names;
+} PBuf;
 
-  DynamicArray iargs;
-  DynamicArray eargs;
-
-  DynamicArray types;
-
-  DynamicArray stmts;
-  DynamicArray exprs;
-} ParseBuf;
-
-static StrView insert_intern(HSet *hs, char *intrn, Intern i)
+// TODO: rework numerical constants
+// TODO: consistent naming scheme
+typedef enum
 {
-  return insert(hs, i.idx + intrn, i.len >> 8);
-}
+  ROOT = 0,
 
-Token expect_token(LexRes *lr, TokTag tag)
+  FUNC = 1,
+  TYPE = 2,
+
+  IMPLICIT_ARG_LIST = 4,
+  EXPLICIT_ARG_LIST = 9,
+
+  STATEMENT  = 0x10,
+  EXPRESSION = 0x70,
+  EXPR_CONT  = 0xc0,
+
+  CONTENT_LIT = 0x1000000, // is there a literal associated with the token
+  CONTENT_STR = 0x2000000, // is there a string associated with the token
+  CHOICE_END  = 0x4000000, // optional rule? y/n
+  CHOICE      = 0x8000000, // optional rule? y/n
+
+  // WCLSE = 0x10000000, // waiting for a close? y/n
+
+  INTRO          = 0x20000000,                // introducer token? y/n
+  CLOSE          = 0x40000000,                // bracketing closer? y/n
+  CLOSE_FN_ARROW = CLOSE | INTRO | 0x1a,      // add ->
+  CLOSE_TY_SUBTY = CLOSE | INTRO | 0x1b,      // add <:
+  CLOSE_TY_JUDGE = CLOSE | INTRO | 0x1c,      // add :
+  CLOSE_PFX_SUB  = CLOSE | INTRO | 0x1d,      // add prefix -
+  CLOSE_IFX_ADD  = CLOSE | INTRO | EXPR_CONT, // add inifix +
+
+  TERM              = 0x80000000,                          // terminal? y/n
+  TERM_BL_OPN_INT   = TERM | INTRO | 0x100,                // {
+  TERM_LET_BIND     = TERM | INTRO | STATEMENT,            // let
+  TERM_ASSGN        = TERM | STATEMENT + 1,                // =
+  TERM_RETURN       = TERM | INTRO | STATEMENT + 2,        // return
+  TERM_FN_INT       = TERM | INTRO | FUNC,                 // fn
+  TERM_FN_END       = TERM | CLOSE | FUNC,                 // }
+  TERM_BIND_NAME    = TERM | CONTENT_STR | 0x103,          // name
+  TERM_BIND_USE     = TERM | CONTENT_STR | EXPRESSION,     // name
+  TERM_LITERAL_INT  = TERM | CONTENT_STR | EXPRESSION + 1, // name
+  TERM_PREFIX_MINUS = TERM | CLOSE_PFX_SUB,                // -
+  TERM_SEMI         = TERM | INTRO | CLOSE | STATEMENT,    // ;
+  TERM_ADD_CONT     = TERM | CLOSE_IFX_ADD,                // +
+
+  TERM_TY_FN_ARROW = TERM | CLOSE_FN_ARROW, // ->
+  TERM_TY_SUBTY    = TERM | CLOSE_TY_SUBTY, // <:
+  TERM_TY_JUDGE    = TERM | CLOSE_TY_JUDGE, // :
+  TERM_BUILTIN_TY  = TERM | TYPE,           // u32, s32, ...
+  TERM_TY_NAME_USE = TERM | TYPE + 1,       // Atype, ...
+
+  TERM_IMP_ARGL_INT = TERM | INTRO | IMPLICIT_ARG_LIST,     // [
+  TERM_IMP_ARG_INT  = TERM | INTRO | IMPLICIT_ARG_LIST + 1, // Tname
+  TERM_IMP_ARG_SEP  = TERM | INTRO | IMPLICIT_ARG_LIST + 2, // ,
+  TERM_IMP_ARGL_END = TERM | CLOSE | IMPLICIT_ARG_LIST,     // ]
+
+  TERM_EXP_ARGL_INT = TERM | INTRO | EXPLICIT_ARG_LIST,     // (
+  TERM_EXP_ARG_INT  = TERM | INTRO | EXPLICIT_ARG_LIST + 1, // name
+  TERM_EXP_ARG_SEP  = TERM | INTRO | EXPLICIT_ARG_LIST + 2, // ,
+  TERM_EXP_ARGL_END = TERM | CLOSE | EXPLICIT_ARG_LIST,     // )
+} PStateKind;
+
+typedef struct
 {
-  Token tok = *lr->tokens++;
+  PStateKind kind;
 
-  printf("0x%02x == 0x%02x\n", tok.tag & 0xff, tag);
-  // TODO: proper error handling
-  assert((tok.tag & 0xff) == tag);
-  return tok;
-}
-
-bool opt_munch_token(LexRes *lr, TokTag tag)
-{
-  Token tok = *lr->tokens;
-  bool matched = (tok.tag & 0xff) == tag;
-
-  if (matched)
-    lr->tokens++;
-
-  return matched;
-}
-
-bool is_at(LexRes *lr, TokTag tag)
-{
-  Token tok = *lr->tokens;
-  return (tok.tag & 0xff) == tag;
-}
-
-static void parse_type(ParseBuf *buf, LexRes *lr, HSet *hs)
-{
-  // TODO: more complex types
-  Token tok = *lr->tokens++;
-
-  ParsedType type = {};
-  switch (tok.tag & 0xff)
+  uint32_t chsz; // TODO: ?
+  union
   {
-  case TOK_TYPE_ID:
-    type.kind = NAMED;
-    type.as_named = insert_intern(hs, lr->intern, tok.as_typ_ident);
-    break;
-
-  default:
-    type.kind = INBUILT;
-    type.as_inbuilt = tok.tag & 0xff;
-  }
-
-  push_elem(&buf->types, sizeof(type), &type);
-}
-
-static uint32_t parse_implicit_args(ParseBuf *, LexRes *, HSet *)
-{
-  err(1, "TODO: "
-         "parse implicit arguments");
-}
-
-static uint32_t parse_explicit_args(ParseBuf *buf, LexRes *lr, HSet *hs)
-{
-  uint32_t len = 0;
-  Token intro = expect_token(lr, '(');
-  ptrdiff_t matching = intro.matching_scp >> 8;
-  Token *end = lr->tokens + matching;
-
-  while (lr->tokens < end &&
-         !opt_munch_token(lr, ')')) // TODO: fix lexer matching scope
-  {
-    ExplicitArg earg = {};
-
-    Token name = expect_token(lr, TOK_VAL_ID);
-    earg.name = insert_intern(hs, lr->intern, name.as_val_ident);
-
-    expect_token(lr, ':');
-
-    earg.type = buf->types.len;
-    parse_type(buf, lr, hs);
-
-    opt_munch_token(lr, ',');
-
-    push_elem(&buf->eargs, sizeof(earg), &earg);
-    len++;
-  }
-
-  return len;
-}
-
-struct
-{
-  uint8_t l, r;
-} infix_binding_power(char op)
-{
-  uint8_t l[255] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 1};
-
-  uint8_t r[255] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 2};
-
-  uint8_t op_idx = (uint8_t)op;
-
-  return (typeof(infix_binding_power(0))){.l = l[op_idx], .r = r[op_idx]};
-}
-
-uint8_t prefix_binding_power(char op)
-{
-  uint8_t p[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5};
-
-  return p[(uint8_t)op];
-}
-
-[[nodiscard]] static uint32_t parse_expr(ParseBuf *buf, LexRes *lr, HSet *hs,
-                                         TokTag delim, uint8_t min_bp)
-{
-  uint32_t lhs;
-  // TODO: other kinds of expressions
-  Expression expr = {};
-  Token first_tok = *lr->tokens++;
-  switch (first_tok.tag & 0xff)
-  {
-  case TOK_LIT_INT:
-    expr.kind = LIT_INT;
-    expr.as_lit_int = lr->lits[first_tok.as_lit_idx >> 8];
-
-    lhs = push_elem(&buf->exprs, sizeof(expr), &expr);
-    break;
-
-  case TOK_VAL_ID:
-    expr.kind = BIND_USE;
-    expr.as_bind_use = insert_intern(hs, lr->intern, first_tok.as_val_ident);
-
-    lhs = push_elem(&buf->exprs, sizeof(expr), &expr);
-    break;
-
-  case TOK_PAREN_O:
-    lhs = parse_expr(buf, lr, hs, delim, 0);
-    expect_token(lr, ')');
-    break;
-
-  default: // TODO: actually validat that this is a valid prefix op
-    char op = (char)(first_tok.tag & 0xff);
-    expr.kind = UNARY_EXPR;
-    expr.as_una_expr.op = op;
-    uint8_t r_bp = prefix_binding_power(op);
-
-    assert(r_bp && "encountered unexpected token"
-                   " while parsing an expression");
-
-    expr.as_una_expr.operand = parse_expr(buf, lr, hs, delim, r_bp);
-
-    lhs = push_elem(&buf->exprs, sizeof(expr), &expr);
-  }
-
-  while (lr->tokens < lr->tkeptr && !is_at(lr, delim))
-  {
-    char op = (char)(lr->tokens->tag & 0xff);
-    expr.kind = BINARY_EXPR;
-    expr.as_bin_expr.op = op;
-    expr.as_bin_expr.lhs = lhs;
-
-    typeof(infix_binding_power(op)) bp = infix_binding_power(op);
-    if (bp.l < min_bp)
-      break;
-
-    lr->tokens++;
-    expr.as_bin_expr.rhs = parse_expr(buf, lr, hs, delim, bp.r);
-    lhs = push_elem(&buf->exprs, sizeof(expr), &expr);
-  }
-
-  return lhs;
-}
-
-static void parse_stmt(ParseBuf *buf, LexRes *lr, HSet *hs)
-{
-  if (lr->tokens + 1 > lr->tkeptr)
-    err(1, "encountered unexpected "
-           "eof while parsing statement");
-
-  Token *start = lr->tokens++;
-  Statement s = {};
-
-  switch (start->tag & 0xff)
-  {
-  case TOK_KW_RETRN:
-    s.kind = RETURN;
-    s.as_return = parse_expr(buf, lr, hs, ';', 0);
-    break;
-
-  case TOK_KW_LET:
-    s.kind = LET_BIND;
-    Token name = expect_token(lr, TOK_VAL_ID);
-    s.as_let_bind.name = insert_intern(hs, lr->intern, name.as_val_ident);
-
-    if (opt_munch_token(lr, ':'))
+    uint32_t tpos;
+    struct
     {
-      s.as_let_bind.type = buf->exprs.len;
-      parse_type(buf, lr, hs);
-    }
-    expect_token(lr, '=');
-    s.as_let_bind.expr = parse_expr(buf, lr, hs, ';', 0);
-    break;
+      uint32_t tok_pos, nod_pos;
+    } dclo;
+  };
+} PState;
 
-  default:
-    err(1,
-        "encountered unexpected token"
-        " while parsing satement: 0x%x",
-        (start->tag & 0xff));
+typedef DynamicArray PStack;
+
+#define DYNAMIC_MASK (CHOICE | CHOICE_END)
+#define STATIC_MASK ~(unsigned int)DYNAMIC_MASK
+
+static bool term_matches(PStateKind term, TokTag tag)
+{
+  if (!(term & TERM)) return false;
+
+  // TODO: tag lut? or more complex PStateKind encoding?
+  switch (term & STATIC_MASK)
+  {
+  case TERM_FN_INT:       return (tag & 0xff) == TOK_KW_FN;
+  case TERM_FN_END:       return (tag & 0xff) == '}';
+  case TERM_BL_OPN_INT:   return (tag & 0xff) == '{';
+  case TERM_LET_BIND:     return (tag & 0xff) == TOK_KW_LET;
+  case TERM_ASSGN:        return (tag & 0xff) == '=';
+  case TERM_RETURN:       return (tag & 0xff) == TOK_KW_RETRN;
+  case TERM_BIND_NAME:
+  case TERM_BIND_USE:     return (tag & 0xff) == TOK_VAL_ID;
+  case TERM_LITERAL_INT:  return (tag & 0xff) == TOK_LIT_INT;
+  case TERM_PREFIX_MINUS: return (tag & 0xff) == '-';
+  case TERM_SEMI:         return (tag & 0xff) == ';';
+  case TERM_ADD_CONT:     return (tag & 0xff) == '+';
+  case TERM_TY_FN_ARROW:  return (tag & 0xff) == TOK_KW_ARROW;
+  case TERM_TY_SUBTY:     return (tag & 0xff) == TOK_KW_SUBTY;
+  case TERM_TY_JUDGE:     return (tag & 0xff) == ':';
+  case TERM_BUILTIN_TY:
+    return memchr((char[]){(char)TOK_KW_U8, (char)TOK_KW_U16, (char)TOK_KW_U32,
+                           (char)TOK_KW_U64, (char)TOK_KW_S8, (char)TOK_KW_S16,
+                           (char)TOK_KW_S32, (char)TOK_KW_S64},
+                  (int)tag, 8);
+  case TERM_TY_NAME_USE:  return (tag & 0xff) == TOK_TYPE_ID;
+  case TERM_IMP_ARGL_INT: return (tag & 0xff) == '[';
+  case TERM_IMP_ARG_INT:  return (tag & 0xff) == TOK_TYPE_ID;
+  case TERM_IMP_ARGL_END: return (tag & 0xff) == ']';
+  case TERM_EXP_ARGL_INT: return (tag & 0xff) == '(';
+  case TERM_EXP_ARG_INT:  return (tag & 0xff) == TOK_VAL_ID;
+  case TERM_IMP_ARG_SEP:
+  case TERM_EXP_ARG_SEP:  return (tag & 0xff) == ',';
+  case TERM_EXP_ARGL_END: return (tag & 0xff) == ')';
+  default:                assert(false && "unhandled terminal match");
   }
-
-  push_elem(&buf->stmts, sizeof(s), &s);
-
-  expect_token(lr, ';');
 }
 
-static uint32_t parse_block(ParseBuf *buf, LexRes *lr, HSet *hs)
+// TODO: this doesn't work, as the emmited node needs to depend on the
+//       matched rule too.
+static PNodeKind tag_to_node_kind(TokTag tag)
 {
-  uint32_t len = 0;
-  Token intro = expect_token(lr, '{');
-  ptrdiff_t matching = intro.matching_scp >> 8;
-  Token *end = lr->tokens + matching;
-
-  while (lr->tokens < end &&
-         !opt_munch_token(lr, '}')) // TODO: optional munch shouldn't be needed
+  switch (tag)
   {
-    parse_stmt(buf, lr, hs);
-
-    len++;
+  case TOK_LIT_INT:  return LITERAL_INT;
+  case TOK_VAL_ID:   return BIND_USE;
+  case TOK_PAREN_O:  return EXP_ARGLIST_BEG;
+  case TOK_PAREN_C:  return EXP_ARGLIST_END;
+  case TOK_PLUS:     return INFIX_PLUS;
+  case TOK_HYPHON:   return PREFIX_MINUS;
+  case TOK_COLON:    return BIND_TY_JUDGE;
+  case TOK_SEMI:     return STMT_SEMI;
+  case TOK_BRACK_O:
+  case TOK_BRACK_C:
+  case TOK_BRACE_O:
+  case TOK_BRACE_C:
+  case TOK_KW_FN:    return FUN_INT;
+  case TOK_KW_ARROW: return FUN_ARROW;
+  case TOK_KW_LET:   return STMT_LET_BIND;
+  case TOK_KW_U8:
+  case TOK_KW_S8:
+  case TOK_KW_U16:
+  case TOK_KW_U32:
+  case TOK_KW_U64:
+  case TOK_KW_S16:
+  case TOK_KW_S32:
+  case TOK_KW_S64:   return BUILTIN_TY;
+  case TOK_KW_HOLE:  return INVALID;
+  case TOK_KW_RETRN: return STMT_RETURN;
+  default:           return INVALID;
   }
-
-  return len;
 }
 
-static void parse_fn(ParseBuf *buf, LexRes *lr, HSet *hs)
+static StrView intern_lex_intern(HSet *names, char *intern, Intern i)
 {
-  FunctionDef fn = {};
-
-  Token name_tok = expect_token(lr, TOK_VAL_ID);
-  fn.name = insert_intern(hs, lr->intern, name_tok.as_val_ident);
-
-  if (lr->tokens + 1 > lr->tkeptr)
-    err(1, "encountered unexpected eof while parsing function");
-
-  Token first_arglist_start = *lr->tokens;
-  if ((first_arglist_start.tag & 0xff) == '[')
-  {
-    fn.ea_beg = buf->eargs.len;
-    fn.ea_len = parse_implicit_args(buf, lr, hs);
-  }
-
-  fn.ia_beg = buf->iargs.len;
-  fn.ia_len = parse_explicit_args(buf, lr, hs);
-
-  if (lr->tokens + 1 > lr->tkeptr)
-    err(1, "encountered unexpected eof while parsing function");
-
-  Token arr_or_bl = *(lr->tokens++);
-
-  if ((arr_or_bl.tag & 0xff) == TOK_KW_ARROW)
-  {
-    fn.type = buf->types.len;
-    parse_type(buf, lr, hs);
-  }
-
-  fn.bl_beg = buf->stmts.len;
-  fn.bl_len = parse_block(buf, lr, hs);
-
-  push_elem(&buf->funcs, sizeof(fn), &fn);
+  return insert(names, intern + i.idx, i.len >> 8);
 }
 
-[[nodiscard("has to be freed")]] ParseRes parse(LexRes lr)
+[[nodiscard]] ParseRes parse(LexRes lr)
 {
-  ParseBuf buf = {};
-  // TODO: hacky
-  push_elem(&buf.funcs, sizeof(ExplicitArg), &(FunctionDef){});
-  push_elem(&buf.iargs, sizeof(ExplicitArg), &(ImplicitArg){});
-  push_elem(&buf.eargs, sizeof(ExplicitArg), &(ExplicitArg){});
-  push_elem(&buf.types, sizeof(ExplicitArg), &(ParsedType){});
-  push_elem(&buf.stmts, sizeof(ExplicitArg), &(Statement){});
-  push_elem(&buf.exprs, sizeof(ExplicitArg), &(Expression){});
+  PBuf tree;
+  PStack stack;
 
-  HSet hs = {};
+  PState focus = {.kind = ROOT};
+  Token word   = *lr.tokens;
+  uint32_t i   = 0;
 
-  while (lr.tokens < lr.tkeptr)
+  while (lr.tokens < lr.tkeptr) // TODO: handle eof
   {
-    switch ((lr.tokens++)->tag & 0xff)
+    PNode n = {};
+    n.pos   = word.pos;
+
+    // printf("%d\n", i++);
+    // printf("word = 0x%x\n", word.tag & 0xff);
+    // printf("rule = 0x%x\n", focus.kind);
+    // printf("rule & CLOSE = 0x%x\n", focus.kind & CLOSE);
+    // printf("rule & STATIC_MASK = 0x%x\n", focus.kind & STATIC_MASK);
+    if (i > 90) abort();
+
+    if ((focus.kind & TERM) && term_matches(focus.kind, word.tag))
     {
-    case TOK_KW_FN:
-      parse_fn(&buf, &lr, &hs);
-      break;
 
-    default:
-      err(1, "unhandled token in top position: 0x%x", lr.tokens->tag & 0xff);
+      if (focus.kind & CHOICE) stack.len -= focus.chsz;
+
+      if (focus.kind & INTRO)
+      {
+        n.kind = tag_to_node_kind(word.tag);
+        switch (focus.kind & STATIC_MASK)
+        {
+        case TERM_FN_INT: focus.kind = FUNC; break;
+        case TERM_EXP_ARGL_INT:
+
+          focus.kind = TERM_EXP_ARGL_END;
+          focus.tpos = tree.buf.len;
+          co_push(&stack, focus);
+          focus.kind = TERM_EXP_ARG_INT | CHOICE;
+          focus.chsz = 0;
+          break;
+        case TERM_EXP_ARG_INT:
+
+          focus.kind = TERM_EXP_ARG_SEP | CHOICE;
+          co_push(&stack, focus);
+          focus.kind = TERM_TY_JUDGE;
+          break;
+        case TERM_EXP_ARG_SEP:
+
+          focus.kind = TERM_EXP_ARG_INT;
+          focus.chsz = 0;
+          break;
+        case TERM_TY_JUDGE:
+
+          focus.kind         = CLOSE_TY_JUDGE;
+          focus.dclo.nod_pos = tree.buf.len;
+          focus.dclo.tok_pos = word.pos;
+          co_push(&stack, focus);
+          focus.kind = TYPE;
+          // TODO: hacky
+          goto delay_closing;
+        case TERM_TY_FN_ARROW:
+
+          focus.kind         = TYPE;
+          focus.dclo.nod_pos = tree.buf.len;
+          focus.dclo.tok_pos = word.pos;
+          break;
+        case TERM_BL_OPN_INT:
+
+          // TODO: handle free blocks, if blocks, ...
+          focus.kind = TERM_FN_END;
+          co_push(&stack, focus);
+          focus.kind = STATEMENT;
+          break;
+        case TERM_LET_BIND:
+
+          // TODO: maybe move semi stuff here
+          focus.kind = EXPRESSION;
+          co_push(&stack, focus);
+          focus.kind = TERM_ASSGN;
+          co_push(&stack, focus);
+          focus.kind = TERM_TY_JUDGE | CHOICE;
+          focus.tpos = tree.buf.len;
+          co_push(&stack, focus);
+          focus.kind = TERM_BIND_NAME;
+          break;
+        case TERM_ADD_CONT:
+          focus.kind         = CLOSE_IFX_ADD;
+          focus.dclo.nod_pos = tree.buf.len;
+          focus.dclo.tok_pos = word.pos;
+          co_push(&stack, focus);
+          focus.kind = EXPRESSION;
+          // TODO: hacky
+          goto delay_closing;
+        case TERM_PREFIX_MINUS:
+          focus.kind         = CLOSE_PFX_SUB;
+          focus.dclo.nod_pos = tree.buf.len;
+          focus.dclo.tok_pos = word.pos;
+          co_push(&stack, focus);
+          focus.kind = EXPRESSION;
+          // TODO: hacky
+          goto delay_closing;
+        case TERM_RETURN: focus.kind = EXPRESSION; break;
+        case TERM_SEMI:
+
+          n.subtree_sz = tree.buf.len - focus.tpos;
+          n.kind       = tag_to_node_kind(word.tag);
+
+          focus.kind = STATEMENT;
+          break;
+        default: assert(false && "unhandled introducer");
+        }
+      }
+      else if (focus.kind & CLOSE)
+      {
+        n.subtree_sz = tree.buf.len - focus.tpos;
+        n.kind       = tag_to_node_kind(word.tag);
+        // TODO: empty stack
+        if (stack.len) co_pop(&stack, &focus);
+      }
+      else if (stack.len) { co_pop(&stack, &focus); }
+
+      if (focus.kind & CONTENT_STR)
+        n.str = intern_lex_intern(&tree.names, lr.intern, word.as_intern);
+      else if (focus.kind & CONTENT_LIT)
+        n.literal_int = lr.lits[n.literal_int];
+
+      co_push(&tree.buf, n);
+
+    delay_closing:
+      word = *++lr.tokens;
+    }
+    else if (focus.kind & CLOSE &&
+             !(focus.kind & TERM)) // "fixup" close bracketing nodes
+    {
+      switch (focus.kind & STATIC_MASK) // TODO: factor out
+      {
+      case CLOSE_TY_JUDGE: n.kind = BIND_TY_JUDGE; break;
+      case CLOSE_TY_SUBTY: n.kind = BIND_TY_SUBTY; break;
+      case CLOSE_FN_ARROW: n.kind = FUN_ARROW; break;
+      case CLOSE_PFX_SUB:  n.kind = PREFIX_MINUS; break;
+      case CLOSE_IFX_ADD:  n.kind = INFIX_PLUS; break;
+      default:             assert(false && "unhandled close fixup");
+      }
+      n.pos        = focus.dclo.tok_pos;
+      n.subtree_sz = focus.dclo.nod_pos - tree.buf.len;
+      co_push(&tree.buf, n);
+      co_pop(&stack, &focus);
+    }
+    else if (!(focus.kind & TERM))
+    {
+      /* nonterminal rules.
+       *
+       *  in this parser they basically play the role of convenience functions
+       *  where with mutually recursive functions you would call smaller
+       *  functions to parse parts of your grammer, here you just schedule them
+       *  on a stack
+       */
+
+      // TODO: maybe propagate some flags
+      switch (focus.kind & STATIC_MASK)
+      {
+      case ROOT: focus.kind = TERM_FN_INT; break;
+      case FUNC:
+        focus.kind = TERM_BL_OPN_INT;
+        focus.tpos = tree.buf.len;
+        co_push(&stack, focus);
+
+        focus.kind = TERM_TY_FN_ARROW | CHOICE;
+        focus.chsz = 0;
+        co_push(&stack, focus);
+
+        focus.kind = TERM_EXP_ARGL_INT;
+        co_push(&stack, focus);
+
+        focus.kind = TERM_IMP_ARGL_INT | CHOICE;
+        focus.chsz = 0;
+        co_push(&stack, focus);
+
+        focus.kind = TERM_BIND_NAME;
+        break;
+      case TYPE:
+        focus.kind = TERM_TY_NAME_USE | CHOICE_END;
+        focus.chsz = 0;
+        co_push(&stack, focus);
+
+        focus.kind = TERM_BUILTIN_TY | CHOICE;
+        focus.chsz = 1;
+        break;
+
+      case STATEMENT:
+        // TODO: 0 stmts, ...
+        focus.kind = TERM_LET_BIND | CHOICE;
+        focus.chsz = 0;
+        co_push(&stack, focus);
+
+        focus.kind = TERM_RETURN | CHOICE;
+        focus.chsz = 1;
+        break;
+      case EXPRESSION:
+        focus.kind = EXPR_CONT;
+        co_push(&stack, focus);
+
+        focus.kind = TERM_PREFIX_MINUS | CHOICE_END;
+        focus.chsz = 0;
+        co_push(&stack, focus);
+
+        focus.kind = TERM_LITERAL_INT | CHOICE;
+        focus.chsz = 1;
+        co_push(&stack, focus);
+
+        focus.kind = TERM_BIND_USE | CHOICE;
+        focus.chsz = 2;
+
+        break;
+      case EXPR_CONT:
+        focus.kind = TERM_SEMI | CHOICE;
+        focus.chsz = 0;
+        co_push(&stack, focus);
+
+        focus.kind = TERM_ADD_CONT | CHOICE;
+        focus.chsz = 1;
+
+        break;
+      default: assert(false && "unhandled nonterminal");
+      }
+    }
+    else if (focus.kind & CHOICE) // unmatched optional token
+    {
+      co_pop(&stack, &focus);
+    }
+    else
+    {
+      // TODO: error
+      printf("focus.kind = 0x%x, word = 0x%x\n", focus.kind, word.tag & 0xff);
+      assert(false && "encountered parse error?");
     }
   }
+
+  free(stack.buffer);
 
   ParseRes res = {
-      .funcs = buf.funcs.buffer,
-      .funcs_len = buf.funcs.len,
-
-      .iargs = buf.iargs.buffer,
-      .iargs_len = buf.eargs.len,
-
-      .eargs = buf.eargs.buffer,
-      .eargs_len = buf.eargs.len,
-
-      .types = buf.types.buffer,
-      .types_len = buf.types.len,
-
-      .stmts = buf.stmts.buffer,
-      .stmts_len = buf.stmts.len,
-
-      .exprs = buf.exprs.buffer,
-      .exprs_len = buf.exprs.len,
-
-      .strings = hs,
-  };
+      .size = tree.buf.len, .tree = tree.buf.buffer, .names = tree.names};
 
   return res;
 }
 
-int main(int argc, char **argv)
+void print_pnode(PNode n)
 {
-  assert(argc > 1);
-
-  FILE *f = fopen(argv[1], "rb");
-  (void)fseek(f, 0, SEEK_END);
-  size_t fsize = (size_t)ftell(f);
-  (void)fseek(f, 0, SEEK_SET); /* same as rewind(f); */
-
-  char *string = malloc(fsize + 1);
-  (void)fread(string, fsize, 1, f);
-  (void)fclose(f);
-
-  string[fsize] = 0;
-
-  Lexer l = {.src = string, .cur = string, .end = string + fsize};
-  LexRes lr = lex(l);
-
-  free(string);
-
-  printf("found %lu tokens\n", lr.tkeptr - lr.tokens);
-  for (Token *tok = lr.tokens; tok < lr.tkeptr; ++tok)
+  switch (n.kind)
   {
-    printf("0x%x ", tok->tag & 0xff);
+  case INVALID:         printf("{ .kind = INVALID }"); break;
+  case FUN_INT:         printf("{ .kind = FUN_INT }"); break;
+  case STMT_RETURN:     printf("{ .kind = STMT_RETURN }"); break;
+  case STMT_LET_BIND:   printf("{ .kind = STMT_LET_BIND }"); break;
+  case BUILTIN_TY:      printf("{ .kind = BUILTIN_TY, kind = ** }"); break;
+  case EXP_ARGLIST_BEG: printf("{ .kind = EXP_ARGLIST_BEG }"); break;
+  case EXP_ARGLIST_END:
+    printf("{ .kind = EXP_ARGLIST_BEG, subtree_sz = %d }", n.subtree_sz);
+    break;
+  case STMT_SEMI:
+    printf("{ .kind = STMT_SEMI, subtree_sz = %d }", n.subtree_sz);
+    break;
+  case FUN_END:
+    printf("{ .kind = FUN_END, subtree_sz = %d }", n.subtree_sz);
+    break;
+  case FUN_ARROW:
+    printf("{ .kind = FUN_ARROW, subtree_sz = %d }", n.subtree_sz);
+    break;
+  case BIND_NAME:
+    printf("{ .kind = BIND_NAME, str = %.*s }", n.str.len, n.str.txt);
+    break;
+  case BIND_TY_JUDGE:
+    printf("{ .kind = BIND_TY_JUDGE, subtree_sz = %d }", n.subtree_sz);
+    break;
+  case BIND_TY_SUBTY:
+    printf("{ .kind = BIND_TY_SUBTY, subtree_sz = %d }", n.subtree_sz);
+    break;
+  case BIND_USE:
+    printf("{ .kind = BIND_USE, str = %.*s }", n.str.len, n.str.txt);
+    break;
+  case LITERAL_INT:
+    printf("{ .kind = BIND_USE, literal_int = %lu }", n.literal_int);
+    break;
+  case PREFIX_MINUS:
+    printf("{ .kind = PREFIX_MINUS, subtree_sz = %d }", n.subtree_sz);
+    break;
+  case INFIX_MINUS:
+    printf("{ .kind = INFIX_MINUS, subtree_sz = %d }", n.subtree_sz);
+    break;
+  case INFIX_PLUS:
+    printf("{ .kind = INFIX_PLUS, subtree_sz = %d }", n.subtree_sz);
+    break;
   }
-  printf("\n");
-  ParseRes parseres = parse(lr);
-  destroy_lexres(lr);
-
-  free(parseres.funcs);
-  free(parseres.eargs);
-  free(parseres.iargs);
-  free(parseres.types);
-  free(parseres.stmts);
-  free(parseres.exprs);
-
-  free_hset(parseres.strings);
-
-  return 0;
 }

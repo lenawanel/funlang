@@ -3,7 +3,6 @@
 #include <ctype.h>
 #include <stdbit.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 #include <xmmintrin.h>
 
@@ -20,7 +19,7 @@ typedef struct
 
 static void intern_char(LexBuf *restrict lexbuf, char c)
 {
-  push_elem((DynamicArray *)&lexbuf->intern, sizeof(char), &c);
+  co_push(&lexbuf->intern, c);
 }
 
 static uint16_t intern_mark(LexBuf lexbuf)
@@ -34,7 +33,7 @@ static Intern intern_strview(LexBuf *restrict lexbuf, StrView s)
 
   lexbuf->intern.len += len;
   if (lexbuf->intern.len > lexbuf->intern.cap)
-    grow_array((DynamicArray *)&lexbuf->intern, sizeof(char));
+    grow_array(&lexbuf->intern, sizeof(char));
 
   Intern i = {.idx = (uint16_t)(lexbuf->intern.len - len),
               .len = (uint16_t)(s.len << 8)};
@@ -47,12 +46,12 @@ static Intern intern_strview(LexBuf *restrict lexbuf, StrView s)
 
 static uint32_t push_lit(LexBuf *restrict lexbuf, uint64_t val)
 {
-  return push_elem(&lexbuf->lits, sizeof(uint64_t), &val);
+  return co_push(&lexbuf->lits, val);
 }
 
 static void push_token(LexBuf *restrict lexbuf, Token tok)
 {
-  push_elem(&lexbuf->tokens, sizeof(Token), &tok);
+  co_push(&lexbuf->tokens, tok);
 }
 
 void destroy_lexres(LexRes lex_res)
@@ -77,24 +76,19 @@ static bool consume_ws(Lexer *restrict l)
 
 static bool consume_char(Lexer *restrict l, char c)
 {
-  if (l->cur + 1 > l->end)
-    return false;
+  if (l->cur + 1 > l->end) return false;
 
   if (*l->cur == c)
   {
     l->cur++;
     return true;
   }
-  else
-  {
-    return false;
-  }
+  else { return false; }
 }
 
 static bool consume_comment(Lexer *restrict l)
 {
-  if (l->cur + 1 > l->end)
-    return false;
+  if (l->cur + 1 > l->end) return false;
 
   if (consume_char(l, '/'))
   {
@@ -110,8 +104,7 @@ static bool consume_comment(Lexer *restrict l)
     else if (consume_char(l, '*'))
     {
       while (++l->cur + 1 < l->end)
-        if (!memcmp("*/", l->cur, 2))
-          break; // consume matching comment close
+        if (!memcmp("*/", l->cur, 2)) break; // consume matching comment close
 
       l->cur += 2;
       return true;
@@ -123,8 +116,7 @@ static bool consume_comment(Lexer *restrict l)
 static char unescape(char **s)
 {
   assert(*s);
-  if (isdigit(**s))
-    return (char)strtol(*s, s, 0);
+  if (isdigit(**s)) return (char)strtol(*s, s, 0);
   switch (**s)
   {
   case 'a':
@@ -194,8 +186,12 @@ static TokTag hash_kw(const char *s, uint32_t len)
 
 #pragma GCC diagnostic ignored "-Wmultichar"
 
-// TODO: hacky
-#define INT_CAST(x) ((int_cast){x}).n
+#define INT_CAST(x, sz, t)                                                     \
+  ((union {                                                                    \
+    char s[sz];                                                                \
+    t n;                                                                       \
+  }){x})                                                                       \
+      .n
 
 // TODO: maybe more efficient hash I bave it set up this way currently
 //       because it's extremely easy to extend
@@ -210,86 +206,53 @@ static TokTag hash_kw(const char *s, uint32_t len)
   case 2:
   { // may be fn, u8, s8
     __m512i ca_vec = _mm512_set1_epi64(kw_can);
-    typedef union
-    {
-      char s[2];
-      int64_t n;
-    } int_cast;
-
-    __m512i kws = _mm512_setr_epi64(INT_CAST("fn"), INT_CAST("u8"),
-                                    INT_CAST("s8"), 0, 0, 0, 0, 0);
+    __m512i kws    = _mm512_setr_epi64(INT_CAST("fn", 2, int64_t),
+                                       INT_CAST("u8", 2, int64_t),
+                                       INT_CAST("s8", 2, int64_t), 0, 0, 0, 0, 0);
 
     __mmask8 match = _mm512_cmpeq_epi64_mask(kws, ca_vec);
 
-    TokTag tok_kinds[] = {TOK_KW_FN, TOK_KW_U8, TOK_KW_S8};
-
-    if (match)
-      return tok_kinds[stdc_trailing_zeros_uc(match)];
+    if (match) return TOK_KW_FN + stdc_trailing_zeros_uc(match);
 
     goto VAL_ID;
   }
   case 3:
   { // may be let, ass, asu, u16, s16, ...
     __m512i ca_vec = _mm512_set1_epi32((int32_t)kw_can);
-    typedef union
-    {
-      char s[3];
-      int32_t n;
-    } int_cast;
-
-    __m512i kws = _mm512_setr_epi32(
-        INT_CAST("asu"), INT_CAST("ass"), INT_CAST("let"), INT_CAST("u16"),
-        INT_CAST("s16"), INT_CAST("u32"), INT_CAST("s32"), INT_CAST("u64"),
-        INT_CAST("s64"), 0, 0, 0, 0, 0, 0, 0);
+    __m512i kws    = _mm512_setr_epi32(
+        INT_CAST("ass", 3, int32_t), INT_CAST("asu", 3, int32_t),
+        INT_CAST("let", 3, int32_t), INT_CAST("u16", 3, int32_t),
+        INT_CAST("u32", 3, int32_t), INT_CAST("u64", 3, int32_t),
+        INT_CAST("s16", 3, int32_t), INT_CAST("s32", 3, int32_t),
+        INT_CAST("s64", 3, int32_t), 0, 0, 0, 0, 0, 0, 0);
 
     __mmask16 match = _mm512_cmpeq_epi32_mask(kws, ca_vec);
 
-    TokTag tok_kinds[] = {TOK_KW_ASU, TOK_KW_ASS, TOK_KW_LET,
-                          TOK_KW_U16, TOK_KW_S16, TOK_KW_U32,
-                          TOK_KW_S32, TOK_KW_U64, TOK_KW_S64};
-
-    if (match)
-      return tok_kinds[stdc_trailing_zeros_uc(match)];
+    if (match) return TOK_KW_ASS + stdc_trailing_zeros_uc(match);
 
     goto VAL_ID;
   }
   case 4:
   {
     __m512i ca_vec = _mm512_set1_epi64(kw_can);
-    typedef union
-    {
-      char s[4];
-      int64_t n;
-    } int_cast;
-
-    __m512i kws = _mm512_setr_epi64(INT_CAST("hole"), 0, 0, 0, 0, 0, 0, 0);
+    __m512i kws =
+        _mm512_setr_epi64(INT_CAST("hole", 4, int64_t), 0, 0, 0, 0, 0, 0, 0);
 
     __mmask8 match = _mm512_cmpeq_epi64_mask(kws, ca_vec);
 
-    TokTag tok_kinds[] = {TOK_KW_HOLE};
-
-    if (match)
-      return tok_kinds[stdc_trailing_zeros_uc(match)];
+    if (match) return TOK_KW_HOLE + stdc_trailing_zeros_uc(match);
 
     goto VAL_ID;
   }
   case 6:
   {
     __m512i ca_vec = _mm512_set1_epi64(kw_can);
-    typedef union
-    {
-      char s[6];
-      int64_t n;
-    } int_cast;
-
-    __m512i kws = _mm512_setr_epi64(INT_CAST("return"), 0, 0, 0, 0, 0, 0, 0);
+    __m512i kws =
+        _mm512_setr_epi64(INT_CAST("return", 6, int64_t), 0, 0, 0, 0, 0, 0, 0);
 
     __mmask8 match = _mm512_cmpeq_epi64_mask(kws, ca_vec);
 
-    TokTag tok_kinds[] = {TOK_KW_RETRN};
-
-    if (match)
-      return tok_kinds[stdc_trailing_zeros_uc(match)];
+    if (match) return TOK_KW_RETRN + stdc_trailing_zeros_uc(match);
   }
 
   VAL_ID:
@@ -297,6 +260,8 @@ static TokTag hash_kw(const char *s, uint32_t len)
     return TOK_VAL_ID;
   }
 }
+
+#undef INT_CAST
 
 #endif // x64
 
@@ -312,14 +277,13 @@ typedef struct ScopeStacks
 // TODO: actually take the effort to optimize this
 [[nodiscard]] LexRes lex(Lexer l)
 {
-  LexBuf res_buf = {};
+  LexBuf res_buf     = {};
   ScopeStacks scopes = {};
 
   while (l.cur < l.end)
   {
 
-    if (l.cur >= l.end)
-      break;
+    if (l.cur >= l.end) break;
 
     Token tok = {0};
 
@@ -333,8 +297,7 @@ typedef struct ScopeStacks
     }
     else if (char_at == '/')
     {
-      if (consume_comment(&l))
-        continue;
+      if (consume_comment(&l)) continue;
       goto punct;
     }
     else if (isdigit(char_at))
@@ -344,9 +307,9 @@ typedef struct ScopeStacks
       // TODO: strtoll does not have a max len, so this
       //       will evoke ub when there is a number right
       //       before eof and `l.source` isn't null terminated
-      uint64_t num = (uint64_t)strtoll(start, &l.cur, 0);
-      uint32_t idx = push_lit(&res_buf, num);
-      tok.pos = (uint32_t)(l.src - l.cur);
+      uint64_t num   = (uint64_t)strtoll(start, &l.cur, 0);
+      uint32_t idx   = push_lit(&res_buf, num);
+      tok.pos        = (uint32_t)(l.src - l.cur);
       tok.as_lit_idx = idx << 8;
       tok.tag |= TOK_LIT_INT;
     }
@@ -363,9 +326,9 @@ typedef struct ScopeStacks
       if (kind == TOK_VAL_ID)
       { // we have a value ident
         StrView s = {.txt = start, .len = len};
-        Intern i = intern_strview(&res_buf, s);
+        Intern i  = intern_strview(&res_buf, s);
 
-        tok.as_val_ident = i;
+        tok.as_intern = i;
       }
 
       tok.tag |= kind;
@@ -378,15 +341,15 @@ typedef struct ScopeStacks
       while (l.cur < l.end && (isalnum(*l.cur) || *l.cur == '_'))
         l.cur++;
 
-      StrView s = {.txt = start, .len = (uint32_t)(l.cur - start)};
-      Intern i = intern_strview(&res_buf, s);
-      tok.pos = (uint32_t)(l.src - start);
-      tok.as_val_ident = i;
+      StrView s     = {.txt = start, .len = (uint32_t)(l.cur - start)};
+      Intern i      = intern_strview(&res_buf, s);
+      tok.pos       = (uint32_t)(l.src - start);
+      tok.as_intern = i;
       tok.tag |= TOK_TYPE_ID;
     }
     else if (char_at == '"')
     {
-      char *start = ++l.cur; // skip first quote
+      char *start   = ++l.cur; // skip first quote
       uint16_t mark = intern_mark(res_buf);
 
       bool escaped = false;
@@ -406,8 +369,8 @@ typedef struct ScopeStacks
       Intern i = {.idx = mark,
                   .len = (uint16_t)((uint16_t)(l.cur - start) << 8u)};
       l.cur++; // skip closing quote
-      tok.pos = (uint32_t)(l.src - start);
-      tok.as_str_lit = i;
+      tok.pos       = (uint32_t)(l.src - start);
+      tok.as_intern = i;
       tok.tag |= TOK_LIT_INT;
     }
     else if (strchr("({[", char_at))
@@ -422,8 +385,8 @@ typedef struct ScopeStacks
         goto next_token; // scope exceeded max depth,
                          // so this token is INVALID
       scopes.stacks[hash][cursor] = res_buf.tokens.len;
-      tok.pos = (uint32_t)(l.src - l.cur++);
-      tok.tag = (uint32_t)char_at;
+      tok.pos                     = (uint32_t)(l.src - l.cur++);
+      tok.tag                     = (uint32_t)char_at;
     }
     else if (strchr(")}]", char_at))
     {
@@ -466,10 +429,7 @@ typedef struct ScopeStacks
           tok.tag = TOK_KW_ARROW;
           l.cur++;
         }
-        else
-        {
-          tok.tag = TOK_HYPHON;
-        }
+        else { tok.tag = TOK_HYPHON; }
       }
       else if (char_at == '<')
       {
@@ -478,20 +438,11 @@ typedef struct ScopeStacks
           tok.tag = TOK_KW_SUBTY;
           l.cur++;
         }
-        else
-        {
-          tok.tag = (unsigned char)char_at;
-        }
+        else { tok.tag = (unsigned char)char_at; }
       }
-      else
-      {
-        tok.tag = (uint32_t)char_at;
-      }
+      else { tok.tag = (uint32_t)char_at; }
     }
-    else
-    {
-      l.cur++;
-    }
+    else { l.cur++; }
 
   next_token:
     push_token(&res_buf, tok);
@@ -501,7 +452,7 @@ typedef struct ScopeStacks
   res.intern = res_buf.intern.buffer;
   res.tokens = res_buf.tokens.buffer;
   res.tkeptr = res_buf.tokens.buffer + res_buf.tokens.len * sizeof(Token);
-  res.lits = res_buf.lits.buffer;
+  res.lits   = res_buf.lits.buffer;
 
   return res;
 }

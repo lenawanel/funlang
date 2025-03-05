@@ -44,27 +44,30 @@ typedef enum
                        // in this source a token tag being a keyword
                        // is indicatated by the corrresponding tag
                        // representation having its highest bit set
+
   TOK_KW_FN    = 0x81,
-  // TODO: reorder
-  TOK_KW_ASS   = 0x82,
-  TOK_KW_ASU   = 0x83,
-  TOK_KW_LET   = 0x84,
-  TOK_KW_RETRN = 0x85,
+  TOK_KW_U8    = 0x82,
+  TOK_KW_S8    = 0x83,
+
   TOK_KW_ARROW = 0x86,
   TOK_KW_SUBTY = 0x87,
   TOK_KW_SHIFR = 0x88,
   TOK_KW_SHIFL = 0x89,
-  TOK_KW_HOLE  = 0x8a,
 
-  TOK_KW_U8    = 0xa0,
-  TOK_KW_U16   = 0xa1,
-  TOK_KW_U32   = 0xa2,
-  TOK_KW_U64   = 0xa3,
-
-  TOK_KW_S8    = 0xa4,
-  TOK_KW_S16   = 0xa5,
-  TOK_KW_S32   = 0xa6,
-  TOK_KW_S64   = 0xa7,
+  // three letter kws
+  TOK_KW_ASS   = 0x90,
+  TOK_KW_ASU   = 0x91,
+  TOK_KW_LET   = 0x92,
+  TOK_KW_U16   = 0x93,
+  TOK_KW_U32   = 0x94,
+  TOK_KW_U64   = 0x95,
+  TOK_KW_S16   = 0x96,
+  TOK_KW_S32   = 0x97,
+  TOK_KW_S64   = 0x98,
+  // 4 letter kws
+  TOK_KW_HOLE  = 0xa0,
+  // 5 letter kws
+  TOK_KW_RETRN = 0xb0,
 } TokTag;
 
 typedef struct Token
@@ -75,9 +78,7 @@ typedef struct Token
     TokTag tag;
     uint32_t as_lit_idx;
     int32_t matching_scp;
-    Intern as_str_lit;
-    Intern as_typ_ident;
-    Intern as_val_ident;
+    Intern as_intern;
   };
 } __attribute__((aligned(8))) Token;
 

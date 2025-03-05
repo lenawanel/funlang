@@ -1,116 +1,61 @@
-#include "common.h"
-#include "lexer.h"
+#ifndef _PARSER_H_
+#define _PARSER_H_
 #include "hashtable.h"
+#include "lexer.h"
+
+typedef enum
+{
+  INVALID,
+
+  FUN_INT,   // fn
+  FUN_END,   // }
+  FUN_ARROW, // ->
+
+  EXP_ARGLIST_BEG, // (
+  EXP_ARGLIST_END, // )
+
+  BIND_NAME,
+  BIND_TY_JUDGE, // :
+  BIND_TY_SUBTY, // <:
+  BIND_USE,
+
+  LITERAL_INT,
+
+  PREFIX_MINUS, // -
+
+  // TODO: maybe have one tag for infix and include the kind info
+  //       in the associated union
+  INFIX_MINUS, // -
+  INFIX_PLUS,  // +
+
+  STMT_RETURN,
+  STMT_LET_BIND,
+  STMT_SEMI,
+  BUILTIN_TY,
+} PNodeKind;
 
 typedef struct
 {
-  StrView name;
-  uint32_t ia_beg, ia_len;
-  uint32_t ea_beg, ea_len;
-  uint32_t type;
-  uint32_t bl_beg, bl_len;
-} FunctionDef;
-
-typedef struct
-{
-  StrView name;
-  uint32_t type;
-} ExplicitArg;
-
-typedef struct
-{
-  StrView tname; /* TODO */
-  uint32_t rhs;
-} ImplicitArg;
-
-// a parsed type, this isn't name resolved etc.
-typedef struct
-{
-  enum
-  {
-    NAMED,
-    INBUILT,
-  } kind;
-
+  PNodeKind kind;
   union
   {
-    StrView as_named;
-    enum
-    {
-      U8  = TOK_KW_U8,  U16 = TOK_KW_U16,
-      U32 = TOK_KW_U32, U64 = TOK_KW_U64,
-      S8  = TOK_KW_S8,  S16 = TOK_KW_S16,
-      S32 = TOK_KW_S32, S64 = TOK_KW_S64,
-    } as_inbuilt;
+    uint32_t subtree_sz;
+    uint64_t literal_int;
+    StrView str;
   };
-} ParsedType;
+  uint32_t pos;
+} PNode;
 
 typedef struct
 {
-  enum
-  {
-    RETURN,
-    LET_BIND,
-  } kind;
+  PNode *tree;
+  uintptr_t size;
 
-  union
-  {
-    uint32_t as_return;
-    struct
-    {
-      StrView name;
-      uint32_t type;
-      uint32_t expr;
-    } as_let_bind;
-  };
-} Statement;
-
-typedef struct
-{
-  uint32_t rhs;
-  uint32_t lhs;
-  char op;
-} BinExpr;
-
-typedef struct
-{
-  uint32_t operand;
-  char op;
-} UnaExpr;
-
-typedef struct
-{
-  enum
-  {
-    LIT_INT,
-    BIND_USE,
-    APPLICATION,
-    BINARY_EXPR,
-    UNARY_EXPR,
-  } kind;
-
-  union
-  {
-    uint64_t as_lit_int;
-    StrView as_bind_use;
-    BinExpr as_bin_expr;
-    UnaExpr as_una_expr;
-  };
-} Expression;
-
-typedef struct
-{
-  FunctionDef *funcs;
-
-  ImplicitArg *iargs;
-  ExplicitArg *eargs;
-
-  ParsedType *types;
-
-  Statement *stmts;
-  Expression *exprs;
-
-  uint32_t funcs_len, iargs_len, eargs_len, types_len, stmts_len, exprs_len;
-
-  HSet strings;
+  HSet names;
 } ParseRes;
+
+[[nodiscard]] ParseRes parse(LexRes lr);
+
+void print_pnode(PNode n);
+
+#endif // _PARSER_H_

@@ -51,13 +51,12 @@ static void grow(HSet *restrict hs)
 
   while (ben++ < een)
   {
-    if (!ben->skey.txt)
-      continue;
+    if (!ben->skey.txt) continue;
 
     insert_unique_in_cap(nentrs, ben->skey, mask);
   }
 
-  end:
+end:
   munmap(hs->entrs, hs->encap);
   hs->entrs = nentrs;
   hs->encap = new_cap;
@@ -68,11 +67,10 @@ bool insert_str(HSet *restrict hs, StrView str)
   // TODO: idk if this is a good idea,
   //       I'm mostly using the golden ratio
   //       for the memes
-  if ((float)hs->inuse * PHI >= (float)hs->encap)
-    grow(hs);
+  if ((float)hs->inuse * PHI >= (float)hs->encap) grow(hs);
 
   uint32_t cap_mask = hs->encap - 1;
-  uint32_t idx = fnv_32_str(str) & cap_mask;
+  uint32_t idx      = fnv_32_str(str) & cap_mask;
 
   for (SetEntry ent = hs->entrs[idx]; ent.skey.txt; idx = (idx + 1) & cap_mask)
   {
@@ -91,7 +89,7 @@ bool remove_str(HSet *restrict hs, StrView str)
 {
 
   uint32_t cap_mask = hs->encap - 1;
-  uint32_t idx = fnv_32_str(str) & cap_mask;
+  uint32_t idx      = fnv_32_str(str) & cap_mask;
 
   SetEntry ent;
   bool there = false;
@@ -100,7 +98,7 @@ bool remove_str(HSet *restrict hs, StrView str)
   {
     if (!memcmp(ent.skey.txt, str.txt, MIN(ent.skey.len, str.len)))
     {
-      there = true;
+      there               = true;
       hs->entrs[idx].skey = (StrView){};
       break;
     }
@@ -115,15 +113,13 @@ bool remove_str(HSet *restrict hs, StrView str)
 
 StrView insert(HSet *restrict hs, char *to_insert, uint32_t len)
 {
-  bool new = insert_str(hs, (StrView){.len = len, .txt = to_insert});
+  bool new  = insert_str(hs, (StrView){.len = len, .txt = to_insert});
   char *txt = hs->intrn.buffer;
 
-  if (new)
-    append_buf(&hs->intrn, sizeof(char), to_insert, len);
+  if (new) co_append(&hs->intrn, to_insert, len);
 
   return (StrView){.txt = txt, .len = len};
 }
-
 
 void free_hset(HSet hs)
 {
