@@ -308,6 +308,7 @@ typedef struct ScopeStacks
       //       will evoke ub when there is a number right
       //       before eof and `l.source` isn't null terminated
       uint64_t num   = (uint64_t)strtoll(start, &l.cur, 0);
+      printf("num = %lu\n", num);
       uint32_t idx   = push_lit(&res_buf, num);
       tok.pos        = (uint32_t)(l.src - l.cur);
       tok.as_lit_idx = idx << 8;

@@ -62,7 +62,7 @@ end:
   hs->encap = new_cap;
 }
 
-bool insert_str(HSet *restrict hs, StrView str)
+StrView insert_str(HSet *restrict hs, StrView str)
 {
   // TODO: idk if this is a good idea,
   //       I'm mostly using the golden ratio
@@ -74,15 +74,18 @@ bool insert_str(HSet *restrict hs, StrView str)
 
   for (SetEntry ent = hs->entrs[idx]; ent.skey.txt; idx = (idx + 1) & cap_mask)
   {
-    if (!memcmp(ent.skey.txt, str.txt, MIN(ent.skey.len, str.len)))
-      return false;
+    if (ent.skey.len == str.len &&
+        !memcmp(ent.skey.txt, str.txt, MIN(ent.skey.len, str.len)))
+      return ent.skey;
   }
+
+  str.txt = co_append(&hs->intrn, str.txt, str.len);
 
   hs->entrs[idx].skey = str;
 
   hs->inuse++;
 
-  return true;
+  return str;
 }
 
 bool remove_str(HSet *restrict hs, StrView str)
@@ -113,12 +116,7 @@ bool remove_str(HSet *restrict hs, StrView str)
 
 StrView insert(HSet *restrict hs, char *to_insert, uint32_t len)
 {
-  bool new  = insert_str(hs, (StrView){.len = len, .txt = to_insert});
-  char *txt = NULL;
-
-  if (new) txt = co_append(&hs->intrn, to_insert, len);
-
-  return (StrView){.txt = txt, .len = len};
+  return insert_str(hs, (StrView){.len = len, .txt = to_insert});
 }
 
 void free_hset(HSet hs)
